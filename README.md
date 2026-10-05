@@ -20,14 +20,7 @@ Scenari implementati: (1) ritiro/richiamo di prodotti non conformi con generazio
 
 ## Installazione
 
-**1. Database.** Dalla cartella del repository:
-
-```
-psql -U postgres -c "CREATE DATABASE azienda_alimentare_erp"
-pg_restore -U postgres -d azienda_alimentare_erp --no-owner --no-privileges database/azienda_alimentare_erp.dump
-```
-
-Il file `.dump` è in formato custom di `pg_dump` (PostgreSQL 17): va aperto con `pg_restore` di versione 17 o superiore, non con `psql`. Contiene solo dati di test.
+**1. Database.** Dalla cartella del repository, crea un database vuoto chiamato `azienda_alimentare_erp` (ad esempio con pgAdmin o con `psql -U postgres -c "CREATE DATABASE azienda_alimentare_erp"`). Poi esegui il restore selezionando il file SQL presente nella cartella `database/` del repository. Contiene solo dati di test.
 
 **2. Server.** Scarica da Releases lo zip `AziendaAlimentareERP-win64` e scompattalo in una cartella. Copia `config/AziendaAlimentareERP.ini.example` accanto all'eseguibile, rinominalo `AziendaAlimentareERP.ini` e compila:
 
