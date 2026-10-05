@@ -1,0 +1,59 @@
+/* =====================================================================
+   base.css — variabili globali, reset e shell di primo livello.
+
+   Contiene:
+     - :root (variabili CSS condivise da tutti gli altri file)
+     - reset html/body
+     - .app-shell (contenitore flex di primo livello)
+     - .ico (icone SVG inline)
+
+   Fa parte dello split di app.css — vedi assets/css/app.css per l'indice
+   completo e le note su Bootstrap Studio.
+   ===================================================================== */
+
+:root {
+  --sidebar-w: 228px;
+  --sidebar-rail-w: 64px;
+  --chat-w: 400px;
+  --topbar-h: 52px;
+
+  /* Sfondo dell'area contenuto: variabile perche' la tab attiva (vedi
+     .tab-strip in topbar.css) deve avere ESATTAMENTE questo colore per
+     "saldarsi" visivamente al contenuto sottostante. Un valore scritto
+     a mano in due punti diversi prima o poi diverge. */
+  --content-bg: #f4f6f8;
+
+  /* Colore primario di Pepper (vedi .pepper-avatar in chat.css): SOLO
+     per gli accenti interni alla chat (pulsante invio, switch "Dettagli
+     tecnici", focus dell'input) - non sovrascrive --bs-primary, che
+     resta il blu usato dal resto del gestionale (sidebar, bolle utente,
+     pulsanti fuori dal pannello chat). Le regole che lo usano sono tutte
+     scoped sotto .chat-panel/.chat-tools-bar/.chat-input-wrapper in
+     chat.css. */
+  --pepper-orange: #fbb74b;
+  --pepper-orange-hover: #e08f0a;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-size: 0.925rem;
+  background: var(--bs-body-bg);
+}
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+}
+
+.ico {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+  flex: 0 0 auto;
+  vertical-align: -0.125em;
+}

@@ -1,0 +1,400 @@
+/* =====================================================================
+   views-common.css — stili condivisi da TUTTE le view del contenuto
+   (dashboard, vendite, prodotti finiti, semilavorati, ricette...).
+
+   IMPORTANTE: nessuna delle view (vedi assets/js/views/*.js) usa classi
+   CSS proprie — riusano tutte queste stesse classi (.kpi-card,
+   .badge-soft, .bar-chart, .card, .table...). Per questo non esiste un
+   file "vendite.css" o "ricette.css" con regole diverse: lo stile e' lo
+   stesso ovunque, cambia solo il markup/i dati generati dal JS di
+   ciascuna vista.
+
+   Se in futuro una vista avra' bisogno di stili SUOI (es. il dettaglio
+   di una singola vendita), aggiungi le sue regole in un file dedicato
+   sotto sections/views/ (vedi i file segnaposto gia' pronti in quella
+   cartella) e importalo da app.css DOPO questo file, cosi' le sue
+   regole vincono in caso di sovrapposizione.
+
+   Fa parte dello split di app.css — vedi assets/css/app.css per l'indice
+   completo.
+   ===================================================================== */
+
+/* NB: qui c'era .view-header (H1 + sottotitolo di pagina, generati da
+   U.intestazioneVista() in common.js). Rimossa insieme all'helper: il
+   titolo vive solo nella topbar, non serve piu' una fascia dedicata in
+   cima al contenuto di ogni vista. */
+
+.card {
+  border-color: var(--bs-border-color);
+}
+
+.card-header {
+  background: #fff;
+  font-weight: 600;
+  font-size: .875rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.kpi-card {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  height: 100%;
+}
+
+.kpi-card .card {
+  height: 100%;
+  transition: box-shadow .15s, transform .15s;
+}
+
+.kpi-card:hover .card {
+  box-shadow: 0 .35rem .9rem rgba(0,0,0,.09);
+  transform: translateY(-1px);
+}
+
+.kpi-value {
+  font-size: 1.65rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.kpi-label {
+  font-size: .78rem;
+  color: var(--bs-secondary-color);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+.kpi-note {
+  font-size: .75rem;
+}
+
+/* Codice colore di urgenza: bordo sinistro sottile + sfondo a
+   gradiente molto tenue (si spegne verso destra, non un riquadro
+   colorato pieno — deve restare leggibile, non gridare). Applicato in
+   JS solo quando il valore lo giustifica davvero (vedi sezioneKPI() in
+   view-dashboard.js): una card senza modificatore resta bianca. */
+
+.kpi-danger {
+  border-left: 3px solid var(--bs-danger);
+  background: linear-gradient(to right, rgba(220,53,69,.06), rgba(220,53,69,0) 65%);
+}
+
+.kpi-warning {
+  border-left: 3px solid var(--bs-warning);
+  background: linear-gradient(to right, rgba(255,193,7,.10), rgba(255,193,7,0) 65%);
+}
+
+.kpi-success {
+  border-left: 3px solid var(--bs-success);
+  background: linear-gradient(to right, rgba(25,135,84,.06), rgba(25,135,84,0) 65%);
+}
+
+.kpi-danger .kpi-value {
+  color: var(--bs-danger);
+}
+
+.kpi-warning .kpi-value {
+  color: var(--bs-warning-emphasis);
+}
+
+.kpi-success .kpi-value {
+  color: var(--bs-success);
+}
+
+/* Grafico a barre in CSS puro: nessuna libreria esterna, quindi
+   nessuna dipendenza da CDN e nessun rischio che il grafico non compaia
+   durante la demo se la rete non c'e'. Asse Y, griglie e tooltip sono
+   la stessa filosofia — markup e pseudo-elementi, non canvas/SVG di
+   terze parti. */
+
+.bar-chart-wrap {
+  display: flex;
+  gap: .625rem;
+}
+
+.chart-y-axis {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  height: 180px;
+  padding-top: .5rem;
+  font-size: .68rem;
+  color: var(--bs-secondary-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bar-chart {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: .5rem;
+  height: 180px;
+  padding-top: .5rem;
+}
+
+/* Griglie orizzontali: allineate alle stesse tacche dell'asse Y (stesso
+   height/padding-top del contenitore), disegnate DIETRO alle barre. */
+
+.chart-gridlines {
+  position: absolute;
+  top: .5rem;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.chart-gridlines span {
+  display: block;
+  height: 0;
+  border-top: 1px dashed var(--bs-border-color);
+}
+
+.bar-col {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  text-align: center;
+  z-index: 1;   /* sopra le griglie */
+}
+
+.bar {
+  position: relative;
+  background: #3B82F6;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+  transition: opacity .15s;
+}
+
+.bar-col:hover .bar {
+  opacity: .82;
+}
+
+/* Tooltip al passaggio del mouse: pseudo-elemento ancorato alla barra
+   (non alla colonna intera), cosi' compare sempre appena sopra la cima
+   REALE della barra, qualunque sia la sua altezza. Il contenuto viene
+   da data-tooltip (vedi cardVendite() in view-dashboard.js); l'attributo
+   title resta in parallelo come fallback per tastiera/screen reader. */
+
+.bar::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, -6px);
+  background: #1f2937;
+  color: #fff;
+  font-size: .7rem;
+  line-height: 1.3;
+  padding: .3rem .55rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, transform .12s;
+  z-index: 10;
+}
+
+.bar::before {
+  content: '';
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translate(-50%, 3px);
+  border: 5px solid transparent;
+  border-top-color: #1f2937;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, transform .12s;
+  z-index: 10;
+}
+
+.bar:hover::after {
+  opacity: 1;
+  transform: translate(-50%, -10px);
+}
+
+.bar:hover::before {
+  opacity: 1;
+  transform: translate(-50%, -3px);
+}
+
+.bar-label {
+  font-size: .68rem;
+  color: var(--bs-secondary-color);
+  margin-top: .3rem;
+}
+
+.table-sm > :not(caption) > * > * {
+  padding: .45rem .5rem;
+}
+
+.table thead th {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  color: var(--bs-secondary-color);
+  font-weight: 600;
+}
+
+/* Badge di stato "soft": pillole con sfondo tenue e testo scuro della
+   stessa tinta, non piu' i badge Bootstrap a tinta piena (bianco su
+   sfondo saturo). Su una tabella di piu' righe un blocco di colore
+   pieno per cella cattura l'occhio riga per riga invece di restare un
+   segnale rapido da leggere — qui il colore resta un accento, il testo
+   fa il resto. Generati da U.badgeStato() in common.js, o inline dove
+   la soglia non e' uno stato dello schema (vedi cardLottiInScadenza in
+   view-dashboard.js). */
+
+.badge-soft {
+  display: inline-block;
+  padding: .25rem .6rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.badge-soft-rosa {
+  background: #fde2e6;
+  color: #9d174d;
+}
+
+.badge-soft-ambra {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-soft-verde {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge-soft-blu {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge-soft-ciano {
+  background: #cffafe;
+  color: #0e7490;
+}
+
+.badge-soft-grigio {
+  background: #f1f3f5;
+  color: #495057;
+}
+
+/* Icona "chiedi all'assistente" nell'header di ogni card: e' il ponte
+   pagina -> chat, cioe' la dimostrazione visiva che l'agente e' una
+   funzione del gestionale. Resta pero' un'azione discreta — il punto
+   di accesso principale e' il FAB qui sotto — quindi nessun bordo,
+   nessun testo, solo l'icona sparkle su sfondo trasparente. */
+
+.btn-ask-icon {
+  border: none;
+  background: transparent;
+  color: var(--bs-secondary-color);
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  transition: background .12s, color .12s;
+}
+
+.btn-ask-icon:hover {
+  background: var(--bs-primary-bg-subtle);
+  color: var(--bs-primary);
+}
+
+.btn-ask-icon .ico {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Pulsante d'accesso PRINCIPALE all'assistente: unico, sempre nello
+   stesso posto, indipendente dalla vista in cui ci si trova. Prima
+   c'erano 5 pulsanti sparsi (1 in topbar + 4 nelle card); ora questo e'
+   l'unico punto d'ingresso "pesante", coerente col pattern FAB che
+   l'utente riconosce da altre app. */
+
+.chat-fab {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  width: 52px;
+  height: 52px;
+  border: none;
+  border-radius: 50%;
+  background: var(--bs-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 .5rem 1.25rem rgba(13,110,253,.35);
+  z-index: 1030;
+  transition: transform .15s, box-shadow .15s, right .18s;
+}
+
+.chat-fab:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 .65rem 1.5rem rgba(13,110,253,.4);
+}
+
+.chat-fab .ico {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+/* A drawer aperto il FAB si nasconde: la chiusura passa dal pulsante
+   dedicato in .chat-header-actions (btnChatClose, vedi chat.css), quindi
+   un secondo controllo fluttuante sopra il pannello e' solo un elemento
+   in piu' a schermo. (Versione precedente: restava visibile spostato a
+   sinistra del pannello, a fare anche lui da tasto di chiusura - qui si
+   sceglie invece un solo punto di chiusura, piu' pulito.) */
+body.chat-open .chat-fab {
+  display: none;
+}
+
+/* A tutto schermo il pannello copre l'intera workarea e ha gia' il suo
+   tasto di chiusura in .chat-header-actions: stesso motivo di cui sopra,
+   ridondante con body.chat-open (chat-full la implica sempre), ma
+   esplicito per chiarezza. */
+
+body.chat-full .chat-fab {
+  display: none;
+}
+
+.ico-grande {
+  width: 2.5rem !important;
+  height: 2.5rem !important;
+  opacity: .35;
+}
+
+.placeholder-view {
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+  text-align: center;
+  color: var(--bs-secondary-color);
+}

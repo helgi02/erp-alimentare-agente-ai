@@ -1,0 +1,169 @@
+/* =====================================================================
+   responsive.css — adattamenti sotto i 992px.
+
+   Fa parte dello split di app.css — vedi assets/css/app.css per l'indice
+   completo. Va importato per ULTIMO: le sue media query devono vincere
+   sulle regole "desktop" definite negli altri file (sidebar.css,
+   chat.css, ecc.), quindi deve stare dopo di loro nella cascata.
+   ===================================================================== */
+
+/* Sotto i 992px la chat copre il contenuto invece di affiancarlo:
+   su schermo piccolo lo splitter non ha senso. */
+
+@media (max-width: 991.98px) {
+  body.chat-open .chat-panel {
+    position: fixed;
+    top: var(--topbar-h);
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100%);
+    z-index: 1040;
+    box-shadow: -.5rem 0 1.5rem rgba(0,0,0,.12);
+  }
+
+  /* Sotto i 992px il pannello e' un overlay quasi a piena larghezza:
+     lo spostamento a sinistra usato su desktop non basta a liberare
+     spazio, quindi qui si torna a nascondere il FAB — il pannello ha
+     gia' la sua X, sempre a portata sullo stesso overlay. */
+  body.chat-open .chat-fab {
+    display: none;
+  }
+}
+
+@media (max-width: 991.98px) {
+  body.chat-open .splitter {
+    display: none;
+  }
+}
+
+/* NB: qui c'era la regola che trasformava la sidebar in overlay fisso
+   sotto i 992px, dismissibile con lo stato NASCOSTO ora eliminato
+   (vedi sidebar.css). Senza un modo per richiuderlo, un overlay
+   permanente avrebbe bloccato il contenuto sugli schermi stretti —
+   peggio di niente. La sidebar segue quindi il flusso normale del
+   layout anche su mobile: resta comprimibile in rail (64px) con
+   l'unico pulsante rimasto, in fondo alla sidebar stessa. */
+
+
+/* =====================================================================
+   SMARTPHONE (< 768px) — aggiunto il 29/09/2026.
+
+   Scelte:
+   - La sidebar torna a essere un DRAWER fuori schermo. Il problema che
+     aveva fatto togliere l'overlay (vedi NB sopra: nessun modo di
+     richiuderlo) qui e' risolto da tre vie di chiusura: pulsante menu
+     in topbar, tap sul velo scuro, tap su una voce di menu. Pulsante e
+     velo sono creati da core/shell.js (collegaMenuMobile), non scritti
+     in index.html, cosi' un export di Bootstrap Studio non li perde.
+   - Lo stato 'rail' salvato da desktop viene ignorato: su telefono
+     64px fissi di icone rubano ~17% dello schermo.
+   - La chat diventa a tutto schermo sotto la topbar (niente splitter,
+     niente larghezza variabile).
+   - 100dvh invece di 100vh: sui browser mobili 100vh include la barra
+     degli indirizzi e il fondo della pagina (input chat!) finisce
+     nascosto sotto di essa.
+   ===================================================================== */
+
+.btn-menu-mobile,
+.sidebar-velo {
+  display: none;
+}
+
+@supports (height: 100dvh) {
+  .app-shell { height: 100dvh; }
+}
+
+@media (max-width: 767.98px) {
+
+  /* --- Sidebar come drawer -------------------------------------- */
+  .sidebar,
+  body.sidebar-rail .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 260px;
+    max-width: 85vw;
+    z-index: 1060;
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+  }
+
+  body.menu-mobile-aperto .sidebar {
+    transform: none;
+    box-shadow: .5rem 0 1.5rem rgba(0,0,0,.25);
+  }
+
+  /* Annulla il rail: nel drawer servono sempre le etichette */
+  body.sidebar-rail .brand-text,
+  body.sidebar-rail .nav-item span,
+  body.sidebar-rail .nav-section-label,
+  body.sidebar-rail .sync-label {
+    display: revert;
+  }
+  body.sidebar-rail .nav-item { justify-content: flex-start; }
+  body.sidebar-rail .sync-status { justify-content: flex-start; }
+
+  /* "Comprimi menu" non ha senso in un drawer */
+  #btnSidebarRail { display: none; }
+
+  /* Voci piu' alte: target di tocco ~44px (linee guida Apple/Google) */
+  .nav-item { padding-top: .75rem; padding-bottom: .75rem; }
+
+  .sidebar-velo {
+    position: fixed;
+    inset: 0;
+    z-index: 1055;
+    background: rgba(0,0,0,.4);
+  }
+  body.menu-mobile-aperto .sidebar-velo { display: block; }
+
+  /* --- Topbar ----------------------------------------------------- */
+  .topbar { gap: .4rem; padding: 0 .5rem; }
+
+  .btn-menu-mobile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex: 0 0 40px;
+    padding: 0;
+    font-size: 1.35rem;
+  }
+
+  /* Si tengono solo le icone: avatar utente e scintilla di Pepper */
+  .user-name,
+  .user-caret,
+  .btn-pepper-trigger span {
+    display: none;
+  }
+  .btn-pepper-trigger { margin-right: 0 !important; padding: .45rem .6rem; }
+
+  /* --- Contenuto -------------------------------------------------- */
+  .content { padding: .75rem; }
+
+  /* Le tabelle non devono allargare la pagina: scorrono da sole in
+     orizzontale. display:block e' il trucco piu' economico senza dover
+     avvolgere ogni <table> in .table-responsive dentro le viste. */
+  .content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .content table th,
+  .content table td { white-space: nowrap; }
+
+  /* --- Chat ------------------------------------------------------- */
+  body.chat-open .chat-panel {
+    width: 100%;
+    left: 0;
+    box-shadow: none;
+  }
+  /* Schermo intero e' gia' lo stato normale su telefono */
+  #btnChatFull { display: none; }
+
+  /* 16px evita lo zoom automatico di iOS al focus sull'input */
+  #chatInput { font-size: 16px; }
+}

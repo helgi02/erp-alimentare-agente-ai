@@ -1,0 +1,11 @@
+/* =====================================================================
+   views/vendite.css — override specifici della VISTA VENDITE
+   (assets/js/views/view-vendite.js).
+
+   Vuoto per ora: la vista usa solo le classi condivise definite in
+   ../views-common.css (.card, .table, .badge-soft, .pagination...).
+   Se in futuro si aggiunge una vista "vendita singola" (dettaglio di un
+   ordine), valuta se le sue regole bastano qui sotto o se merita un
+   file a parte (es. vendita-dettaglio.css) — dipende da quanto sara'
+   diversa dalla lista vendite.
+   ===================================================================== */

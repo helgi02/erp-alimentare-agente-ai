@@ -1,0 +1,55 @@
+; AziendaAlimentareERP.ini - ESEMPIO.
+; Copiare questo file accanto a AziendaAlimentareERP.exe con il nome
+; AziendaAlimentareERP.ini e compilare i valori. Il file vero NON va messo su git.
+; ChatModel: id del modello come compare in <ChatEndpoint>/models (vuoto = modello caricato).
+
+[Database]
+Server=localhost
+Port=5432
+Database=azienda_alimentare_erp
+UserName=postgres
+Password=CAMBIAMI
+PoolSize=100
+
+[Server]
+HttpPort=8080
+
+[LLM]
+ChatEndpoint=http://localhost:1234/v1
+ChatModel=
+Temperatura=0.2
+MaxToken=1024
+PresencePenalty=1
+Pensiero=0
+TimeoutMs=180000
+ConsentiCloud=0
+HostCloud=api.openai.com
+ChiaveApi=
+ChiaveApiLocale=
+
+[Embedding]
+; Servizio di EMBEDDING (selezione dei tool): gira sempre dove gira il server,
+; separato dal modello di chat. Model deve essere lo stesso modello che ha
+; costruito l'indice in pgvector.
+Endpoint=http://localhost:1234/v1
+Model=text-embedding-multilingual-e5-large-instruct
+
+[Orchestratore]
+Motore=pianificatore
+
+[SMTP]
+Host=smtp.gmail.com
+Port=465
+Username=
+Password=CAMBIAMI
+FromName=Gestionale Alimentare
+FromAddress=mittente@esempio.it
+; Simula=1: nessuna email parte davvero; ogni invio viene scritto in
+; logs\email_simulate.jsonl. Mettere 0 per spedire sul serio.
+Simula=1
+; ReindirizzaA=indirizzo: le email partono davvero ma tutte verso questo
+; indirizzo (il destinatario vero finisce nell'oggetto). Vale solo con Simula=0.
+;ReindirizzaA=
+
+[Test]
+AbilitaOverride=0

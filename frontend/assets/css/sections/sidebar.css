@@ -1,0 +1,196 @@
+/* =====================================================================
+   sidebar.css — sezione SIDEBAR (.sidebar e tutto cio' che contiene).
+
+   Stati sidebar (estesa / rail) sono classi su <body>, gestite da
+   core/shell.js e persistite in localStorage — vedi app.css per la nota
+   completa sul layout generale.
+
+   Fa parte dello split di app.css — vedi assets/css/app.css per l'indice
+   completo.
+   ===================================================================== */
+
+.sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  background: #1d2530;
+  color: #c8d0da;
+  overflow: hidden;
+  transition: width .18s ease, flex-basis .18s ease;
+}
+
+/* Stato RAIL: solo icone. E' lo stato pensato per quando la chat e'
+   aperta (o, in futuro, per far posto a una barra di tab). */
+
+body.sidebar-rail {
+  --sidebar-w: var(--sidebar-rail-w);
+}
+
+body.sidebar-rail .brand-text, body.sidebar-rail .nav-item span, body.sidebar-rail .nav-section-label, body.sidebar-rail #btnSidebarRail span, body.sidebar-rail .sync-label {
+  display: none;
+}
+
+body.sidebar-rail .nav-item {
+  justify-content: center;
+}
+
+body.sidebar-rail .sync-status {
+  justify-content: center;
+}
+
+/* NB: qui c'era lo stato NASCOSTO (body.sidebar-hidden, --sidebar-w: 0),
+   raggiungibile da un pulsante hamburger in topbar rimosso insieme a
+   lui — vedi il commento su collegaSidebar() in core/shell.js. La
+   sidebar ora ha solo due stati, estesa e rail, sempre visibile ad
+   almeno 64px. */
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+  height: var(--topbar-h);
+  padding: 0 .875rem;
+  flex: 0 0 var(--topbar-h);
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  white-space: nowrap;
+}
+
+.brand-mark {
+  width: 40px;
+  height: 40px;
+  display: flex;
+}
+
+.brand-text {
+  /*font-weight: 600;*/
+  color: #fff;
+  font-size: .9rem;
+  line-height: 1.3;
+}
+
+.brand-text small {
+  font-size: .68rem;
+  font-weight: 400;
+  color: #8b98a8 !important;
+}
+
+.sidebar-nav {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: .5rem 0 1rem;
+}
+
+.sidebar-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-nav::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,.12);
+  border-radius: 3px;
+}
+
+.nav-section-label {
+  font-size: .68rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #6d7a8a;
+  padding: .875rem .95rem .3rem;
+  white-space: nowrap;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  padding: .5rem .95rem;
+  color: #c8d0da;
+  text-decoration: none;
+  font-size: .875rem;
+  white-space: nowrap;
+  border-left: 3px solid transparent;
+}
+
+.nav-item .ico {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+.nav-item:hover {
+  background: rgba(255,255,255,.06);
+  color: #fff;
+}
+
+.nav-item.active {
+  background: rgba(255,255,255,.09);
+  color: #fff;
+  border-left-color: var(--bs-primary);
+  font-weight: 500;
+}
+
+/* Voci fuori perimetro: devono sembrare disattivate a colpo d'occhio */
+
+.sidebar-footer {
+  padding: .625rem;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+.sidebar-footer .btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .5rem;
+  --bs-btn-color: #97a3b1;
+  --bs-btn-border-color: rgba(255,255,255,.15);
+  --bs-btn-hover-bg: rgba(255,255,255,.08);
+  --bs-btn-hover-color: #fff;
+  --bs-btn-hover-border-color: rgba(255,255,255,.25);
+  white-space: nowrap;
+}
+
+/* Indicatore di stato sincronizzazione: era in topbar, ora qui — al
+   suo posto in topbar c'e' il badge utente (vedi .user-badge in
+   topbar.css), che somiglia di piu' a un vero gestionale. Colori
+   pensati per lo sfondo scuro della sidebar (#1d2530), non per un
+   fondo chiaro: .sync-dot e .sync-sep/.sync-time sono condivisi con la
+   versione precedente ma qui prendono una palette diversa. */
+
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .72rem;
+  color: #97a3b1;
+  white-space: nowrap;
+  padding: 0 .3rem .625rem;
+  overflow: hidden;
+}
+
+.sync-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--bs-success);
+  box-shadow: 0 0 0 3px rgba(25,135,84,.25);
+  flex: 0 0 7px;
+}
+
+.sync-status.is-demo .sync-dot {
+  background: var(--bs-warning);
+  box-shadow: 0 0 0 3px rgba(255,193,7,.25);
+}
+
+.sync-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sync-sep {
+  color: #5c6979;
+}
+
+.sync-time {
+  font-variant-numeric: tabular-nums;
+  color: #c8d0da;
+  font-weight: 500;
+}

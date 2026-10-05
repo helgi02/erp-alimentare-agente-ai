@@ -1,0 +1,39 @@
+/* =====================================================================
+   app.css — punto d'ingresso degli stili custom della shell del
+   gestionale.
+
+   index.html carica SOLO questo file (<link rel="stylesheet"
+   href="assets/css/app.css">): gli stili veri sono divisi in file per
+   sezione, importati qui con @import, cosi' aggiungere una sezione non
+   richiede di toccare index.html.
+
+   ATTENZIONE - BOOTSTRAP STUDIO: il file .bsdesign contiene ancora una
+   vecchia copia MONOLITICA di app.css e, all'export, la riscrive sopra
+   questa (successo il 25/09/2026: tutte le @import sparite, stili delle
+   sezioni non piu' caricati). Non riesportare da Bootstrap Studio finche'
+   il design non e' riallineato.
+
+   ORDINE DELLE @import = ORDINE DELLA CASCATA
+     1. base.css          variabili :root, reset, .app-shell, .ico
+     2. topbar.css        .main/.workarea/.content, topbar, tab-strip
+     3. sidebar.css       sidebar e stati (estesa / rail / nascosta)
+     4. views-common.css  classi condivise da tutte le viste
+     5. views/*.css       override specifici per vista
+     6. chat.css          pannello dell'agente (Pepper)
+     7. responsive.css    PER ULTIMO: le media query devono vincere
+   ===================================================================== */
+
+@import url("sections/base.css");
+@import url("sections/topbar.css");
+@import url("sections/sidebar.css");
+@import url("sections/views-common.css");
+@import url("sections/views/dashboard.css");
+@import url("sections/views/vendite.css");
+@import url("sections/views/prodotti-finiti.css");
+@import url("sections/views/semilavorati.css");
+@import url("sections/views/materie-prime.css");
+@import url("sections/views/ricette.css");
+@import url("sections/views/lotti.css");
+@import url("sections/views/tracciabilita.css");
+@import url("sections/chat.css");
+@import url("sections/responsive.css");

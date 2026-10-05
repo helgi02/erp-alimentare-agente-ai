@@ -1,0 +1,43 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background Card -->
+  <rect width="120" height="120" rx="28" fill="url(#bgGrad)"/>
+  <rect x="2" y="2" width="116" height="116" rx="26" fill="none" stroke="url(#goldGrad)" stroke-width="1.5" stroke-opacity="0.4"/>
+
+  <!-- Wheat & Biscuit Emblem -->
+  <g transform="translate(60, 60)">
+    <!-- Scalloped Biscuit Outer Ring (Dotted) -->
+    <circle cx="0" cy="0" r="38" fill="none" stroke="url(#goldGrad)" stroke-width="2.5" stroke-dasharray="6 4"/>
+    
+    <!-- Central Grain Stem -->
+    <path d="M 0 28 L 0 -22" stroke="url(#goldGrad)" stroke-width="3" stroke-linecap="round"/>
+    
+    <!-- Wheat Grains -->
+    <path d="M 0 14 C -10 9, -15 2, -15 -4 C -7 -4, 0 4, 0 14 Z" fill="url(#goldGrad)"/>
+    <path d="M 0 0 C -10 -5, -15 -12, -15 -18 C -7 -18, 0 -10, 0 0 Z" fill="url(#goldGrad)"/>
+    <path d="M 0 -13 C -8 -18, -12 -24, -12 -29 C -5 -29, 0 -22, 0 -13 Z" fill="url(#goldGrad)"/>
+    
+    <path d="M 0 14 C 10 9, 15 2, 15 -4 C 7 -4, 0 4, 0 14 Z" fill="url(#goldGrad)"/>
+    <path d="M 0 0 C 10 -5, 15 -12, 15 -18 C 7 -18, 0 -10, 0 0 Z" fill="url(#goldGrad)"/>
+    <path d="M 0 -13 C 8 -18, 12 -24, 12 -29 C 5 -29, 0 -22, 0 -13 Z" fill="url(#goldGrad)"/>
+    
+    <!-- Top Spikes -->
+    <path d="M 0 -22 L -6 -34" stroke="url(#goldGrad)" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 0 -22 L 0 -36" stroke="url(#goldGrad)" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 0 -22 L 6 -34" stroke="url(#goldGrad)" stroke-width="2" stroke-linecap="round"/>
+
+    <circle cx="-24" cy="22" r="2" fill="#FBBF24"/>
+    <circle cx="24" cy="22" r="2" fill="#FBBF24"/>
+  </g>
+</svg>
