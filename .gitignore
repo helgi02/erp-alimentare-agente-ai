@@ -1,0 +1,19 @@
+# Configurazione locale con credenziali: non va mai su git.
+*.ini
+!*.ini.example
+
+# Output di compilazione e file locali di Delphi
+*.dcu
+*.rsm
+*.res
+__history/
+__recovery/
+*.dproj.local
+Win32/
+Win64/
+
+# Log, esportazioni e file temporanei generati dal server
+logs/
+export/
+*.log
+*.tmp

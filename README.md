@@ -20,7 +20,14 @@ Scenari implementati: (1) ritiro/richiamo di prodotti non conformi con generazio
 
 ## Installazione
 
-**1. Database.** Dalla cartella del repository, crea un database vuoto chiamato `azienda_alimentare_erp` (ad esempio con pgAdmin o con `psql -U postgres -c "CREATE DATABASE azienda_alimentare_erp"`). Poi esegui il restore selezionando il file SQL presente nella cartella `database/` del repository. Contiene solo dati di test.
+**1. Database.** Dalla cartella del repository:
+
+```
+psql -U postgres -c "CREATE DATABASE azienda_alimentare_erp"
+pg_restore -U postgres -d azienda_alimentare_erp --no-owner --no-privileges database/azienda_alimentare_erp.dump
+```
+
+Il file `.dump` è in formato custom di `pg_dump` (PostgreSQL 17): va aperto con `pg_restore` di versione 17 o superiore, non con `psql`. Contiene solo dati di test.
 
 **2. Server.** Scarica da Releases lo zip `AziendaAlimentareERP-win64` e scompattalo in una cartella. Copia `config/AziendaAlimentareERP.ini.example` accanto all'eseguibile, rinominalo `AziendaAlimentareERP.ini` e compila:
 
@@ -51,3 +58,25 @@ database/    azienda_alimentare_erp.dump        database di test (pg_dump, forma
 frontend/    sito statico + avvia-frontend.bat
 docs/        schemi di flusso e documento di riferimento sul richiamo
 ```
+
+## Codice sorgente del server (facoltativo)
+
+La cartella `codice-server/` contiene il progetto Delphi (VCL, DMVCFramework, FireDAC con PostgreSQL) da cui è stato compilato l'eseguibile in `server/`. Serve solo per leggere o ricompilare il codice.
+
+```
+codice-server/
+  AziendaAlimentareERP.dpr / .dproj    progetto (piattaforma Win64)
+  uFrmMain, uWebModule                 finestra principale e modulo web
+  agente_ai/                           agente: 1_turno, 2_piano, 3_scelta_tool, 4_controlli,
+                                       5_esecuzione, 6_risposta, modello, tool (tool MCP)
+  controllers/                         endpoint REST e controller dell'agente
+  services/                            logica di business
+  models/                              classi ActiveRecord, una per tabella
+  common/, core/                       configurazione, log, accesso al database
+  librerie/                            librerie di terze parti, solo sorgenti, con le loro licenze
+```
+
+Librerie incluse, ciascuna con la propria licenza: DMVCFramework con dmustache, LoggerPro e SwagDoc (Apache 2.0), mcp-server-delphi, SynPDF (MPL/GPL/LGPL). I percorsi di ricerca nel `.dproj` sono relativi alla cartella `librerie/`.
+
+Per ricompilare: apri `AziendaAlimentareERP.dproj` in Delphi (ProjectVersion 20.5 nel file), scegli la piattaforma **Win64** e compila. L'IDE rigenera da solo il file `.res`. Per eseguire il risultato servono accanto all'eseguibile le DLL presenti in `server/` (in particolare `libpq.dll`) e il file `.ini` descritto sopra. Il codice è commentato in italiano.
+
