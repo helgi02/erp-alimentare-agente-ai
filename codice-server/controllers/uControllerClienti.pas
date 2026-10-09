@@ -12,12 +12,9 @@ uses
   uModelCliente;
 
 type
-  // Controller CRUD per l'anagrafica clienti (tabella clienti).
-  // Stessa struttura di TControllerFornitori: e' il pattern standard che
-  // replichiamo per ogni anagrafica del gestionale (vedi commento in
-  // uModelCliente sulla differenza di indirizzi fatturazione/consegna,
-  // che qui non cambia nulla a livello di controller perche' la
-  // serializzazione resta delegata a ToJSONObject/FromJSONObject).
+  // CRUD dell'anagrafica clienti. Stessa struttura di TControllerFornitori: la
+  // serializzazione e' delegata a ToJSONObject/FromJSONObject, anche per gli indirizzi di
+  // fatturazione e consegna.
   [MVCPath('/api/clienti')]
   TControllerClienti = class(TMVCController)
   public
@@ -43,8 +40,6 @@ type
   end;
 
 implementation
-
-{ TControllerClienti }
 
 procedure TControllerClienti.GetAll(ctx: TWebContext);
 var
@@ -90,8 +85,8 @@ var
   LCliente: TCliente;
   LBody: TJSONObject;
 begin
-  // Vedi commento in TControllerFornitori.Create: BodyAsJSONObject non
-  // esiste in TMVCWebRequest, si usa il parser JSON dell'RTL.
+  // Vedi TControllerFornitori.Create: BodyAsJSONObject non esiste in TMVCWebRequest, si usa
+  // il parser JSON dell'RTL.
   LBody := TJSONObject.ParseJSONValue(ctx.Request.Body) as TJSONObject;
   if LBody = nil then
   begin
@@ -104,7 +99,6 @@ begin
     try
       LCliente.FromJSONObject(LBody);
 
-      // Validazione minima dei campi obbligatori
       if (LCliente.RagioneSociale = '') or
          (LCliente.PartitaIva = '') or
          (LCliente.Email = '') then
@@ -200,9 +194,8 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // TCliente.Delete solleva un'eccezione se il cliente e' referenziato da
-  // ordini_vendita o ddt_uscita (nessun ON DELETE CASCADE lato DB): la
-  // intercettiamo per restituire un 409 invece di un 500 generico.
+  // TCliente.Delete solleva un'eccezione se il cliente e' referenziato da ordini_vendita o
+  // ddt_uscita (nessun ON DELETE CASCADE): si restituisce 409 invece di un 500 generico.
   try
     if TCliente.Delete(LID) then
       Render(HTTP_STATUS.NoContent, '')

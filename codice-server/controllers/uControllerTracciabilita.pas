@@ -10,26 +10,14 @@ uses
   uServiziTracciabilita;
 
 type
-  // Endpoint di sola lettura per l'albero di propagazione di un lotto
-  // (scenario 1, ritiro/richiamo): a partire da un lotto di origine
-  // (materia prima, semilavorato o prodotto finito) risale/scende la
-  // catena di consumi/produzioni fino ai DDT di uscita e ai clienti
-  // raggiunti. Tutta la logica di attraversamento del grafo vive in
-  // TServizioTracciabilita (services/uServiziTracciabilita.pas); questo
-  // controller si limita, come i suoi gemelli, a leggere l'id, delegare
-  // e tradurre l'esito in risposta HTTP.
-  //
-  //   GET /api/tracciabilita/materie-prime/($id)
-  //   GET /api/tracciabilita/semilavorati/($id)
-  //   GET /api/tracciabilita/prodotti-finiti/($id)
-  //
-  // Nested path sotto un'unica base, non tre controller separati come
-  // per i lotti: qui i tre endpoint condividono lo stesso "verbo"
-  // (traccia questo lotto) e differiscono solo per il tipo di lotto di
-  // partenza, esattamente la situazione per cui TControllerRicette usa
-  // /api/ricette/<tipo>/($id) invece di tre basi indipendenti - stessa
-  // convenzione, stesso motivo (id non ambiguo, un solo controller da
-  // registrare per un'unica "funzionalita'" con tre varianti di input).
+  // Albero di propagazione di un lotto (scenario 1): da un lotto di origine (materia prima,
+  // semilavorato o prodotto finito) la catena di consumi/produzioni fino ai DDT di uscita e
+  // ai clienti raggiunti. L'attraversamento del grafo e' in TServizioTracciabilita; qui si
+  // legge l'id, si delega e si traduce l'esito.
+  // GET /api/tracciabilita/materie-prime/($id), /semilavorati/($id),
+  // /prodotti-finiti/($id).
+  // Percorso nidificato in un solo controller, come /api/ricette/<tipo>/($id): i tre
+  // endpoint differiscono solo per il tipo di lotto di partenza.
   [MVCPath('/api/tracciabilita')]
   TControllerTracciabilita = class(TMVCController)
   public
@@ -47,8 +35,6 @@ type
   end;
 
 implementation
-
-{ TControllerTracciabilita }
 
 procedure TControllerTracciabilita.GetAlberoMateriaPrima(ctx: TWebContext);
 var

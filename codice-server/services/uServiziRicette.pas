@@ -17,42 +17,31 @@ uses
   uModelRicettaSemilavoratoRiga;
 
 type
-  // Il costo, componente per componente, della ricetta CORRENTE di un
-  // prodotto finito (o di un semilavorato - vedi TCostoRicettaSemilavorato).
-  // DTO interno al layer Services: non persistito, non JSON.
-  //
-  // CostoUnitario e' sempre espresso NELLA STESSA unita' di misura di
-  // UnitaMisuraDose (es. se UnitaMisuraDose = 'g', CostoUnitario e' un
-  // prezzo al grammo), cosi' CostoTotale = QuantitaStandard *
-  // CostoUnitario e' sempre corretto anche quando l'unita' di dose della
-  // ricetta differisce da quella di acquisto del componente (es. materia
-  // prima acquistata in kg ma dosata in g in ricetta - vedi il commento
-  // su TRicettaSemilavoratoRiga.UnitaMisuraDose, e' un caso voluto, non
-  // un errore). La conversione la fa
-  // TServizioRicette.CostoUnitarioMateriaPrima, non il chiamante - vedi
-  // ConvertiQuantita piu' sotto. Vale SOLO per i componenti materia
-  // prima: per i componenti semilavorato vedi CostoDisponibile sotto.
+  // Costo, componente per componente, della ricetta corrente di un prodotto finito (o di un
+  // semilavorato, TCostoRicettaSemilavorato). DTO interno, non persistito ne' JSON.
+  // CostoUnitario e' nella stessa unita' di UnitaMisuraDose (se la dose e' in 'g', e' un
+  // prezzo al grammo), cosi' CostoTotale = QuantitaStandard * CostoUnitario e' corretto
+  // anche se la dose differisce dall'unita' di acquisto (es. acquistata in kg, dosata in g:
+  // voluto). La conversione la fa TServizioRicette.CostoUnitarioMateriaPrima
+  // (ConvertiQuantita). Vale solo per le materie prime: per i semilavorati vedi
+  // CostoDisponibile.
   TCostoComponenteRicetta = class
   public
     IsComponenteMateriaPrima: Boolean;
     ComponenteID: Integer;   // materia_prima_id o semilavorato_id, a seconda del flag sopra
     Denominazione: string;   // nome leggibile del componente - vedi il commento in
-                              // CalcolaCostoRicettaProdottoFinito sul perche' e' qui e non solo l'id
+                              // Vedi CalcolaCostoRicettaProdottoFinito (perche' e' qui e
+                              // non solo l'id).
     QuantitaStandard: Currency;
     UnitaMisuraDose: string;
     CostoUnitario: Currency;
     CostoTotale: Currency;   // QuantitaStandard * CostoUnitario
 
-    // False SOLO per componenti semilavorato: lo schema attuale di
-    // ricette_semilavorati non censisce la resa di produzione (quanto
-    // produce UNA esecuzione della ricetta), quindi non c'e' modo di
-    // derivare un costo per unita' di peso/volume dal costo dell'intera
-    // esecuzione senza rischiare di gonfiarlo (vedi il commento in testa
-    // a CalcolaCostoRicettaProdottoFinito). Quando False, CostoUnitario e
-    // CostoTotale restano a 0 e NON entrano nel CostoTotale aggregato del
-    // padre (TCostoRicetta/TCostoRicettaSemilavorato.CostoCompleto lo
-    // segnala). Sempre True per le materie prime, il cui costo e' sempre
-    // disponibile (da DDT o da ordine, vedi CostoUnitarioMateriaPrima).
+    // False solo per i semilavorati: ricette_semilavorati non censisce la resa di
+    // produzione, quindi dal costo dell'intera esecuzione non si ricava un costo per unita'
+    // senza gonfiarlo. Se False, CostoUnitario e CostoTotale sono 0 e non entrano nel
+    // CostoTotale del padre (lo segnala CostoCompleto). Sempre True per le materie prime
+    // (costo da DDT o da ordine).
     CostoDisponibile: Boolean;
   end;
 
@@ -64,27 +53,17 @@ type
     Componenti: TObjectList<TCostoComponenteRicetta>;
     CostoTotale: Currency;   // somma dei SOLI componenti con CostoDisponibile = True
 
-    // False se almeno un componente e' un semilavorato (vedi
-    // TCostoComponenteRicetta.CostoDisponibile): CostoTotale in quel caso
-    // e' un costo PARZIALE, non il costo reale della ricetta. Chi mostra
-    // questo dato (uRicetteToolProvider.pas, uControllerRicette.pas) deve
-    // segnalarlo esplicitamente invece di presentare CostoTotale come se
-    // fosse completo.
+    // False se un componente e' un semilavorato (CostoDisponibile): CostoTotale e'
+    // parziale. Chi lo mostra (uRicetteToolProvider, uControllerRicette) deve segnalarlo.
     CostoCompleto: Boolean;
 
     constructor Create;
     destructor Destroy; override;
   end;
 
-  // Gemella di TCostoRicetta, per la ricetta CORRENTE di un semilavorato
-  // invece che di un prodotto finito (introdotta per la vista "dettaglio
-  // ricetta" della schermata Semilavorati del frontend, GET /api/ricette/
-  // semilavorati/($id) — vedi TControllerRicette). Stessa struttura
-  // (Componenti + CostoTotale); campo di testata SemilavoratoID al posto
-  // di ProdottoFinitoID invece di un campo EntitaID generico con un flag
-  // "tipo": il chiamante sa gia' con quale entita' ha a che fare (ha
-  // scelto lui quale dei due metodi chiamare), un flag qui non
-  // aggiungerebbe informazione, solo un controllo in piu' da fare.
+  // Gemella di TCostoRicetta per un semilavorato (GET /api/ricette/semilavorati/($id),
+  // TControllerRicette). Campo SemilavoratoID invece di un EntitaID con flag di tipo: il
+  // chiamante sa gia' quale metodo ha scelto.
   TCostoRicettaSemilavorato = class
   public
     SemilavoratoID: Integer;
@@ -93,25 +72,18 @@ type
     Componenti: TObjectList<TCostoComponenteRicetta>;
     CostoTotale: Currency;   // somma dei SOLI componenti con CostoDisponibile = True
 
-    // Vedi il commento gemello su TCostoRicetta.CostoCompleto: False se
-    // almeno un componente di QUESTA ricetta e' a sua volta un
-    // semilavorato (distinta base multi-livello), il cui costo non e'
-    // calcolabile per lo stesso motivo.
+    // Come TCostoRicetta.CostoCompleto: False se un componente e' a sua volta un
+    // semilavorato (distinta multi-livello).
     CostoCompleto: Boolean;
 
     constructor Create;
     destructor Destroy; override;
   end;
 
-  // Una riga della vista trasversale "tutte le ricette correnti" (sia di
-  // prodotti finiti sia di semilavorati), usata dalla schermata "Ricette e
-  // distinte" del frontend per la lista (GET /api/ricette). Elenco
-  // leggero: niente componenti ne' costo, solo NumeroComponenti (un COUNT
-  // lato SQL). Calcolare il costo per OGNI riga di una lista sarebbe
-  // sforzo sprecato per un dato che li' non serve — il costo di una sola
-  // materia prima richiede gia' una query su DDT/ordini fornitore, il
-  // dettaglio (GET /api/ricette/prodotti-finiti/($id) o /semilavorati/
-  // ($id)) lo calcola solo per LA ricetta che l'utente ha aperto.
+  // Riga della lista "tutte le ricette correnti" (prodotti finiti e semilavorati) per
+  // "Ricette e distinte" (GET /api/ricette). Leggera: niente componenti ne' costo, solo
+  // NumeroComponenti (COUNT in SQL). Il costo di una materia prima richiede gia' una query
+  // su DDT/ordini: lo calcola solo il dettaglio della ricetta aperta.
   TRicettaCorrenteSintetica = class
   public
     IsProdottoFinito: Boolean;   // False = semilavorato
@@ -126,17 +98,11 @@ type
     NumeroComponenti: Integer;
   end;
 
-  // Una singola sostituzione richiesta all'interno di un adattamento di
-  // ricetta: "togli questo componente, mettine un altro". Un adattamento
-  // reale (es. "senza lattosio") tipicamente ne comprende PIU' di una
-  // insieme (es. sia il latte in polvere sia il burro) - per questo
-  // Simula/ApplicaAdattamentoRicetta lavorano su un ARRAY di questo
-  // record, non su una singola sostituzione: tutte le righe cambiate
-  // insieme producono UNA sola nuova versione di ricetta (o UN solo nuovo
-  // prodotto), mai una versione/un prodotto intermedio per ciascun cambio
-  // - la stessa atomicita' che il vecchio ApplicaSostituzioneIngrediente
-  // (sostituito da questo file) gia' garantiva per il caso a un solo
-  // componente.
+  // Una sostituzione di un adattamento: "togli questo componente, metti quest'altro". Un
+  // adattamento reale (es. senza lattosio) ne ha piu' d'una (latte in polvere e burro):
+  // Simula/ApplicaAdattamentoRicetta lavorano su un array e tutte le righe cambiate
+  // producono una sola nuova versione di ricetta (o un solo nuovo prodotto), mai versioni
+  // intermedie.
   TSostituzioneComponente = record
     VecchioIsMateriaPrima: Boolean;
     VecchioComponenteID: Integer;
@@ -146,19 +112,11 @@ type
     NuovaUnitaMisuraDose: string;     // '' = mantieni l'unita' del componente sostituito
   end;
 
-  // Un componente NUOVO da aggiungere alla ricetta risultante, SENZA
-  // sostituire nulla di esistente - caso reale osservato nello scenario 3:
-  // togliendo il burro da un frollino per renderlo senza lattosio si perde
-  // struttura, e serve poter aggiungere un legante/addensante che nella
-  // ricetta originale non c'era affatto, non solo scambiare un componente
-  // con un altro. TSostituzioneComponente da sola non basta a esprimerlo:
-  // richiede sempre un "vecchio" componente da cui partire.
-  //
-  // A differenza di TSostituzioneComponente, qui QuantitaStandard e
-  // UnitaMisuraDose sono SEMPRE obbligatorie, non sentinelle opzionali
-  // (0/''): non esiste un componente di partenza da cui ereditarle se il
-  // chiamante le omette, quindi CalcolaRigheFinali solleva un'eccezione se
-  // arrivano vuote invece di indovinare un default privo di senso.
+  // Componente nuovo da aggiungere senza sostituire nulla. Caso reale dello scenario 3:
+  // togliendo il burro da un frollino si perde struttura e serve un legante che nella
+  // ricetta non c'era; TSostituzioneComponente non basta, richiede un componente di
+  // partenza. Qui QuantitaStandard e UnitaMisuraDose sono sempre obbligatorie (niente da
+  // ereditare): CalcolaRigheFinali solleva un'eccezione se vuote.
   TAggiuntaComponente = record
     IsMateriaPrima: Boolean;
     ComponenteID: Integer;
@@ -166,10 +124,8 @@ type
     UnitaMisuraDose: string;
   end;
 
-  // Un componente (materia prima o semilavorato) proposto da
-  // TServizioRicette.CercaComponenti come possibile sostituto: porta gia'
-  // i propri allergeni, cosi' il chiamante (tool MCP, poi il modello) puo'
-  // mostrarli senza una seconda interrogazione per elemento.
+  // Componente proposto da CercaComponenti come sostituto, con i propri allergeni, cosi'
+  // non serve una seconda interrogazione.
   TCandidatoComponente = class
   public
     IsMateriaPrima: Boolean;
@@ -178,37 +134,23 @@ type
     Denominazione: string;
     Allergeni: TObjectList<TAllergene>;  // posseduto
 
-    // Giacenza disponibile AGGREGATA (somma su tutti i lotti, vedi
-    // TServizioGiacenza.GiacenzaDisponibileMateriaPrima/Semilavorato) del
-    // componente candidato, al momento della ricerca. PURAMENTE
-    // INFORMATIVO: CercaComponenti la calcola e la espone cosi' il
-    // modello puo' avvisare il cliente ("posso proporlo, ma al momento
-    // non c'e' disponibilita' in magazzino"), ma zero giacenza NON esclude
-    // il candidato dai risultati ne' blocca simula_adattamento_ricetta o
-    // applica_adattamento_ricetta piu' avanti nel flusso - un adattamento
-    // di ricetta crea/riusa una VARIANTE (una distinta base), non una
-    // produzione: non consuma magazzino nell'immediato, quindi la
-    // giacenza di oggi non e' un vincolo per poter registrare la ricetta,
-    // solo un'informazione utile a chi decide se proporla ora.
+    // Giacenza aggregata (somma sui lotti, TServizioGiacenza) del candidato alla ricerca.
+    // Solo informativa: permette al modello di avvisare "non c'e' disponibilita'", ma
+    // giacenza zero non esclude il candidato ne' blocca simula/applica_adattamento_ricetta.
+    // Un adattamento crea o riusa una variante (una distinta base), non una produzione, e
+    // non consuma magazzino.
     GiacenzaDisponibile: Currency;
 
     destructor Destroy; override;
   end;
 
-  // Esito della simulazione (Turno 1: sola lettura, nessuna scrittura) di
-  // un adattamento - una o piu' sostituzioni insieme - alla ricetta
-  // corrente di un prodotto finito: quanto cambierebbe il costo e come
-  // cambierebbe l'elenco di allergeni della ricetta risultante. E' il
-  // tool MCP (o il modello, nel turno conversazionale successivo) a
-  // decidere se procedere davvero con
-  // TServizioRicette.ApplicaAdattamentoRicetta in base a questo esito.
-  //
-  // AllergeniAttuali/AllergeniSimulati sono entrambi RICALCOLATI dalla
-  // composizione della ricetta (unione degli allergeni di ogni riga), non
-  // letti dalla tabella etichetta anagrafiche_prodotti_finiti_allergeni:
-  // cosi' il confronto "prima/dopo" e' sempre coerente con le righe
-  // davvero coinvolte, anche se l'etichetta del prodotto originale non
-  // fosse per qualche motivo perfettamente allineata alla sua ricetta.
+  // Esito di SimulaAdattamentoRicetta (turno 1, sola lettura): quanto cambierebbero il
+  // costo e gli allergeni della ricetta risultante. In base a questo il modello decide se
+  // procedere con ApplicaAdattamentoRicetta.
+  // AllergeniAttuali/AllergeniSimulati sono ricalcolati dalla composizione della ricetta
+  // (unione degli allergeni delle righe), non letti dall'etichetta
+  // anagrafiche_prodotti_finiti_allergeni: il confronto prima/dopo e' coerente con le righe
+  // anche se l'etichetta non fosse allineata.
   TSimulazioneAdattamento = class
   public
     ProdottoFinitoID: Integer;
@@ -216,12 +158,9 @@ type
     CostoRicettaSimulata: Currency;
     DeltaCosto: Currency;             // simulata - attuale: positivo = piu' caro
 
-    // False se la ricetta attuale o quella simulata contiene almeno un
-    // componente semilavorato (vedi TCostoComponenteRicetta.
-    // CostoDisponibile): in quel caso CostoRicettaAttuale/Simulata/
-    // DeltaCosto sono calcolati sui SOLI componenti materia prima, un
-    // dato parziale che il modello deve presentare come tale al cliente,
-    // non come il vero delta economico dell'adattamento.
+    // False se la ricetta attuale o quella simulata ha un semilavorato (CostoDisponibile):
+    // i costi e DeltaCosto sono sulle sole materie prime e il modello deve presentarli come
+    // parziali.
     CostoCompleto: Boolean;
 
     AllergeniAttuali: TObjectList<TAllergene>;
@@ -232,13 +171,10 @@ type
     destructor Destroy; override;
   end;
 
-  // Esito di ApplicaAdattamentoRicetta (Turno 2: scrittura).
-  // VarianteGiaEsistente distingue i due possibili esiti positivi: creata
-  // una nuova variante, oppure trovata e riusata una variante compatibile
-  // gia' esistente (vedi il commento sul metodo per il criterio di
-  // compatibilita') - cosi' il tool MCP puo' far dire al modello "ho
-  // creato XYZ" oppure "esiste gia' XYZ, te la apro" invece di creare
-  // inutilmente un duplicato.
+  // Esito di ApplicaAdattamentoRicetta (turno 2, scrittura). VarianteGiaEsistente distingue
+  // "creata una nuova variante" da "trovata e riusata una compatibile" (criterio nel
+  // commento del metodo), cosi' il modello dice "ho creato XYZ" o "esiste gia' XYZ" senza
+  // duplicati.
   TEsitoAdattamentoRicetta = class
   public
     VarianteGiaEsistente: Boolean;
@@ -252,121 +188,75 @@ type
     CostoRicettaCompleto: Boolean;  // vedi TSimulazioneAdattamento.CostoCompleto - stesso significato
   end;
 
-  // Layer Services per lo scenario 3 del tirocinio (adattamento ricette su
-  // richiesta cliente con calcolo economico multi-turno). Il "multi-turno"
-  // e' gestito dal modello conversazionale (ogni turno e' una chiamata
-  // tool separata, orchestrata da LM Studio/Qwen), non da uno stato
-  // interno a questa classe: qui esponiamo le operazioni granulari che i
-  // turni tipici richiamano - CercaComponenti (individua i sostituti
-  // compatibili con un vincolo dietetico), SimulaAdattamentoRicetta
-  // (Turno 1: proponi e mostra l'impatto, nessuna scrittura) e
-  // ApplicaAdattamentoRicetta (Turno 2: il cliente conferma, si crea la
-  // variante).
-  //
-  // Scelta di dominio: un adattamento NON modifica mai in-place la
-  // ricetta del prodotto di partenza. Produce sempre una VARIANTE - un
-  // prodotto finito a se' (proprio codice/denominazione/etichetta),
-  // agganciato al prodotto originale tramite
-  // TProdottoFinito.ProdottoFinitoPadreID - riusando una variante
-  // compatibile gia' esistente quando ce n'e' una, per non accumulare
-  // duplicati. Il prodotto originale resta quindi sempre in vendita
-  // invariato: coerente con l'idea che "senza glutine" e' una variante
-  // commerciale, non una correzione del prodotto esistente.
+  // Servizio dello scenario 3 (adattamento ricette con calcolo economico multi-turno). Il
+  // multi-turno lo gestisce il modello (ogni turno e' una chiamata tool), non uno stato
+  // interno: qui ci sono le operazioni dei turni, CercaComponenti (sostituti compatibili
+  // con un vincolo dietetico), SimulaAdattamentoRicetta (turno 1, nessuna scrittura) e
+  // ApplicaAdattamentoRicetta (turno 2, si crea la variante).
+  // Un adattamento non modifica mai in place la ricetta di partenza: produce una variante,
+  // un prodotto finito a se' (codice, denominazione, etichetta), agganciato all'originale
+  // con ProdottoFinitoPadreID, riusando una variante compatibile gia' esistente per non
+  // accumulare duplicati. L'originale resta in vendita invariato: "senza glutine" e' una
+  // variante commerciale, non una correzione.
   TServizioRicette = class
   private
-    // Ultimo costo unitario noto di una materia prima: preferenza al
-    // prezzo REALMENTE pagato (ultima riga DDT di entrata, per data di
-    // ricezione) rispetto al prezzo negoziato in ordine, che puo'
-    // differire (vedi il commento di TOrdineFornitoreRiga.PrezzoUnitario).
-    // Se la materia prima non e' mai stata ancora consegnata (nessun
-    // DDT), si ripiega sull'ultimo prezzo d'ordine disponibile. Se non
-    // esiste NESSUN dato di costo (mai ordinata ne' consegnata), solleva
-    // un'eccezione: senza un costo non e' possibile fare "calcolo
-    // economico", meglio fallire esplicitamente che restituire 0.
-    //
-    // AUnitaMisuraRichiesta e' l'unita' di dose della riga di ricetta che
-    // sta chiamando (es. 'g'): il prezzo che arriva da DDT/ordine e'
-    // espresso nell'unita' di ACQUISTO della materia prima (tipicamente
-    // 'kg' o 'l'), che puo' differire da quella di dose - vedi
-    // ConvertiQuantita per la conversione. Se le due unita' non sono
-    // della stessa grandezza fisica (es. 'kg' vs 'l') solleva
-    // un'eccezione: e' un dato di ricetta incoerente, non qualcosa da
-    // ignorare silenziosamente.
+    // Ultimo costo unitario noto di una materia prima: il prezzo realmente pagato (ultima
+    // riga DDT di entrata per data di ricezione) ha la precedenza su quello negoziato in
+    // ordine (TOrdineFornitoreRiga.PrezzoUnitario); se non e' mai stata consegnata,
+    // l'ultimo prezzo d'ordine. Senza alcun dato solleva un'eccezione: meglio fallire che
+    // restituire 0 in un calcolo economico.
+    // AUnitaMisuraRichiesta e' l'unita' di dose della riga (es. 'g'); il prezzo e'
+    // nell'unita' di acquisto (tipicamente 'kg' o 'l'), da convertire con ConvertiQuantita.
+    // Se non sono della stessa grandezza fisica (kg vs l) solleva un'eccezione: dato di
+    // ricetta incoerente.
     class function CostoUnitarioMateriaPrima(AMateriaPrimaID: Integer;
       const AUnitaMisuraRichiesta: string): Currency;
   public
-    // Costo completo, componente per componente, della ricetta corrente
-    // di un prodotto finito.
+    // Costo completo, per componente, della ricetta corrente di un prodotto finito.
     class function CalcolaCostoRicettaProdottoFinito(
       AProdottoFinitoID: Integer): TCostoRicetta;
 
-    // Gemella di CalcolaCostoRicettaProdottoFinito, per la ricetta
-    // CORRENTE di un semilavorato. Un componente che e' a sua volta un
-    // semilavorato compare come riga con CostoDisponibile = False (vedi
-    // TCostoComponenteRicetta): lo schema attuale non censisce la resa
-    // di produzione, quindi non c'e' modo di ricavarne un costo per
-    // unita' senza rischiare di gonfiarlo - vedi il commento in testa a
-    // CalcolaCostoRicettaProdottoFinito per il ragionamento completo.
+    // Gemella di CalcolaCostoRicettaProdottoFinito per un semilavorato. Un componente
+    // semilavorato compare con CostoDisponibile = False (vedi TCostoComponenteRicetta:
+    // senza la resa di produzione il costo per unita' si gonfierebbe).
     class function CalcolaCostoRicettaSemilavorato(
       ASemilavoratoID: Integer): TCostoRicettaSemilavorato;
 
-    // Elenco di tutte le ricette CORRENTI esistenti, sia di prodotti
-    // finiti sia di semilavorati, per la vista trasversale "Ricette e
-    // distinte" del frontend. Una sola query (UNION ALL fra le due
-    // coppie anagrafica/ricetta) invece di due letture separate
-    // ricomposte in Delphi: piu' semplice, e l'ordinamento finale per
-    // denominazione lo fa il database, non l'applicazione.
+    // Tutte le ricette correnti (prodotti finiti e semilavorati) per "Ricette e distinte".
+    // Una sola query (UNION ALL), ordinata dal database.
     class function GetRicetteCorrenti: TObjectList<TRicettaCorrenteSintetica>;
 
-    // Allergeni dichiarati di un componente (materia prima o
-    // semilavorato — il flag distingue quale anagrafica interrogare).
-    // Sottile ma centralizza la scelta "quale GetAllergeni chiamare" in
-    // un unico punto, cosi' il resto del service non deve ripeterla.
+    // Allergeni dichiarati di un componente (il flag sceglie l'anagrafica): centralizza la
+    // scelta di quale GetAllergeni chiamare.
     class function GetAllergeniComponente(AIsComponenteMateriaPrima: Boolean;
       AComponenteID: Integer): TObjectList<TAllergene>;
 
-    // Cerca materie prime e/o semilavorati candidati a sostituire un
-    // componente di ricetta, filtrando per allergene da escludere
-    // (opzionale - codice, es. "LAT") e per testo sulla denominazione
-    // (opzionale). Tool generico e parametrico (documento di progetto,
-    // sezione 4): un solo metodo per qualunque combinazione di filtri,
-    // non uno specifico per "materie prime senza glutine" e uno per
-    // "semilavorati senza lattosio". AAllergeneEscluso vuoto/non
-    // riconosciuto: '' non filtra affatto, un codice sconosciuto solleva
-    // un'eccezione (errore di chi ha costruito la chiamata, da segnalare
-    // subito invece di restituire silenziosamente zero risultati).
+    // Cerca materie prime e/o semilavorati candidati a sostituire un componente, filtrando
+    // per allergene da escludere (codice, es. "LAT") e testo sulla denominazione, entrambi
+    // opzionali. Un solo metodo per qualunque combinazione di filtri (tool generico e
+    // parametrico). AAllergeneEscluso vuoto non filtra; un codice sconosciuto solleva
+    // un'eccezione (errore di chi chiama, meglio che zero risultati in silenzio).
     class function CercaComponenti(const AEscludiAllergeneCodice: string;
       AIncludiMateriePrime, AIncludiSemilavorati: Boolean;
       const ATesto: string): TObjectList<TCandidatoComponente>;
 
-    // Turno 1: simula un adattamento (una o piu' sostituzioni e/o aggiunte
-    // insieme) della ricetta CORRENTE di un prodotto finito, SENZA
-    // scrivere nulla sul DB. Restituisce il delta di costo e come
-    // cambierebbe l'elenco di allergeni, cosi' il modello puo' presentarli
-    // al cliente prima di procedere. ASostituzioni e AAggiunte possono
-    // essere usate insieme o singolarmente, ma non entrambe vuote (vedi
-    // CalcolaRigheFinali per la differenza fra le due: una sostituzione
-    // parte sempre da un componente esistente, un'aggiunta no).
+    // Turno 1: simula un adattamento (sostituzioni e/o aggiunte) della ricetta corrente,
+    // senza scrivere. Restituisce delta di costo e variazione degli allergeni da mostrare
+    // al cliente. ASostituzioni e AAggiunte si usano insieme o da sole, ma non entrambe
+    // vuote (vedi CalcolaRigheFinali).
     class function SimulaAdattamentoRicetta(AProdottoFinitoID: Integer;
       const ASostituzioni: TArray<TSostituzioneComponente>;
       const AAggiunte: TArray<TAggiuntaComponente>): TSimulazioneAdattamento;
 
-    // Turno 2: applica DAVVERO l'adattamento. Non tocca mai la ricetta del
-    // prodotto di partenza: cerca prima una VARIANTE gia' esistente
-    // (TProdottoFinito.GetVarianti sul prodotto radice) la cui etichetta
-    // attuale non contenga nessuno degli allergeni che questo adattamento
-    // toglie - se la trova, non scrive nulla e la segnala come tale
-    // (TEsitoAdattamentoRicetta.VarianteGiaEsistente = True). Solo se
-    // nessuna variante compatibile esiste ne crea una nuova (richiede
-    // ACodiceNuovoProdotto/ADenominazioneNuovoProdotto, obbligatori in
-    // quel caso) con la sua prima versione di ricetta: righe copiate dalla
-    // ricetta di partenza, con le sostituzioni richieste applicate E le
-    // aggiunte accodate (vedi CalcolaRigheFinali - i componenti NON
-    // toccati da ASostituzioni finiscono comunque, invariati, nella nuova
-    // ricetta: un adattamento non e' mai una ricetta scritta da zero, e'
-    // sempre "quella di partenza, con questi cambiamenti"), in un'unica
-    // scrittura atomica (TDB.ExecuteInTransaction) - o la nuova versione
-    // ha tutte le righe corrette, o nessuna.
+    // Turno 2: applica l'adattamento. Non tocca mai la ricetta di partenza: cerca prima una
+    // variante esistente (TProdottoFinito.GetVarianti del radice) la cui etichetta non
+    // contiene nessuno degli allergeni che l'adattamento toglie; se c'e', non scrive e la
+    // segnala (VarianteGiaEsistente = True). Altrimenti ne crea una
+    // (ACodiceNuovoProdotto/ADenominazioneNuovoProdotto obbligatori) con la prima ricetta:
+    // righe della ricetta di partenza con sostituzioni applicate e aggiunte accodate (i
+    // componenti non toccati restano invariati: un adattamento non e' una ricetta da zero),
+    // in una scrittura atomica (TDB.ExecuteInTransaction): tutte le righe corrette o
+    // nessuna.
     class function ApplicaAdattamentoRicetta(AProdottoFinitoID: Integer;
       const ASostituzioni: TArray<TSostituzioneComponente>;
       const AAggiunte: TArray<TAggiuntaComponente>;
@@ -381,12 +271,9 @@ uses
   uServiziGiacenza;
 
 const
-  // Prezzo REALE pagato: ultima riga DDT di entrata per la materia
-  // prima, ordinata per data di ricezione effettiva. unita_misura e'
-  // l'unita' in cui quel prezzo e' espresso (tipicamente 'kg' o 'l' per
-  // materie prime alimentari) - va SEMPRE letta insieme al prezzo, mai
-  // assunta uguale all'unita' di dose della riga di ricetta che lo
-  // consuma (vedi ConvertiQuantita).
+  // Prezzo reale pagato: ultima riga DDT di entrata, per data di ricezione. unita_misura e'
+  // l'unita' del prezzo: va letta sempre con il prezzo, mai assunta uguale a quella di dose
+  // (ConvertiQuantita).
   SQL_COSTO_DA_DDT =
     'SELECT r.prezzo_unitario, r.unita_misura ' +
     'FROM ddt_entrata_righe r ' +
@@ -395,8 +282,7 @@ const
     'ORDER BY d.data_ricezione DESC ' +
     'LIMIT 1';
 
-  // Fallback: prezzo negoziato nell'ultimo ordine fornitore, se la
-  // materia prima non e' ancora mai stata consegnata.
+  // Fallback: prezzo negoziato nell'ultimo ordine fornitore, se mai consegnata.
   SQL_COSTO_DA_ORDINE =
     'SELECT r.prezzo_unitario, r.unita_misura ' +
     'FROM ordini_fornitori_righe r ' +
@@ -404,8 +290,6 @@ const
     'WHERE r.materia_prima_id = :materia_prima_id ' +
     'ORDER BY o.data_ordine DESC ' +
     'LIMIT 1';
-
-{ TCostoRicetta }
 
 constructor TCostoRicetta.Create;
 begin
@@ -421,8 +305,6 @@ begin
   inherited Destroy;
 end;
 
-{ TCostoRicettaSemilavorato }
-
 constructor TCostoRicettaSemilavorato.Create;
 begin
   inherited Create;
@@ -437,21 +319,16 @@ begin
   inherited Destroy;
 end;
 
-{ TCandidatoComponente }
-
 destructor TCandidatoComponente.Destroy;
 begin
   Allergeni.Free;
   inherited;
 end;
 
-{ TSimulazioneAdattamento }
-
 destructor TSimulazioneAdattamento.Destroy;
 begin
-  // AllergeniRimossi/AllergeniAggiunti NON posseggono i propri elementi
-  // (vedi SottraiAllergeni sotto): contengono riferimenti agli stessi
-  // oggetti di AllergeniAttuali/AllergeniSimulati, che li liberano.
+  // AllergeniRimossi/AllergeniAggiunti non possiedono gli elementi (SottraiAllergeni): sono
+  // riferimenti agli oggetti di AllergeniAttuali/AllergeniSimulati, che li liberano.
   AllergeniRimossi.Free;
   AllergeniAggiunti.Free;
   AllergeniSimulati.Free;
@@ -459,14 +336,10 @@ begin
   inherited;
 end;
 
-{ Funzioni di supporto, private all'unit }
-
-// Una riga di ricetta "risolta": lo stesso componente (IsComponenteMateriaPrima
-// + ComponenteID) di TCostoComponenteRicetta/TRicettaProdottoFinitoRiga, ma
-// senza dipendere ne' dal model (che va liberato presto) ne' dal DTO di
-// costo (che porta anche prezzo, non sempre gia' noto quando serve la
-// riga). E' la rappresentazione comune su cui lavorano sia il calcolo
-// costo sia il calcolo allergeni, prima e dopo una sostituzione.
+// Riga di ricetta risolta: lo stesso componente (IsComponenteMateriaPrima + ComponenteID)
+// di TCostoComponenteRicetta/TRicettaProdottoFinitoRiga, senza dipendere dal model (da
+// liberare presto) ne' dal DTO di costo. E' la rappresentazione comune per costo e
+// allergeni, prima e dopo una sostituzione.
 type
   TRigaFinale = record
     IsComponenteMateriaPrima: Boolean;
@@ -501,25 +374,14 @@ begin
   end;
 end;
 
-// Applica TUTTE le sostituzioni richieste alle righe della ricetta
-// corrente, poi accoda le righe NUOVE indicate in AAggiunte, in un solo
-// passaggio, e restituisce le righe FINALI (quelle da scrivere se si
-// procede, o da cui ricalcolare costo/allergeni se si sta solo
-// simulando). I componenti della ricetta di partenza non toccati da
-// nessuna sostituzione passano INVARIATI (vedi il ramo "else" sotto): un
-// adattamento e' sempre "la ricetta di partenza, con questi cambiamenti",
-// mai una ricetta riscritta da zero - per questo il chiamante non deve (e
-// non puo') rielencare i componenti che restano uguali, solo quelli che
-// cambiano o si aggiungono.
-//
-// Valida che ogni sostituzione richiesta trovi esattamente una riga da
-// sostituire nella ricetta di partenza - se una non la trova, o se due
-// sostituzioni puntano allo stesso componente vecchio, solleva
-// un'eccezione PRIMA che il chiamante possa scrivere qualunque cosa (vedi
-// ApplicaAdattamentoRicetta) - e valida che nessun componente (stesso
-// tipo+id) finisca per comparire due volte fra le righe finali, che si
-// tratti di due sostituzioni verso lo stesso nuovo componente o di
-// un'aggiunta che duplica qualcosa gia' in ricetta.
+// Applica tutte le sostituzioni alle righe della ricetta corrente, accoda le aggiunte e
+// restituisce le righe finali (da scrivere o da cui ricalcolare costo e allergeni). I
+// componenti non toccati passano invariati: un adattamento e' "la ricetta di partenza, con
+// questi cambiamenti", e il chiamante rielenca solo cio' che cambia o si aggiunge.
+// Solleva un'eccezione prima di ogni scrittura se una sostituzione non trova la sua riga,
+// se due sostituzioni puntano allo stesso componente vecchio, o se un componente (tipo+id)
+// comparirebbe due volte fra le righe finali (due sostituzioni verso lo stesso nuovo
+// componente, o un'aggiunta che duplica qualcosa gia' in ricetta).
 function CalcolaRigheFinali(ARigheOriginali: TObjectList<TRicettaProdottoFinitoRiga>;
   const ASostituzioni: TArray<TSostituzioneComponente>;
   const AAggiunte: TArray<TAggiuntaComponente>): TArray<TRigaFinale>;
@@ -593,19 +455,14 @@ begin
           'non e'' presente nella ricetta corrente.',
           [BoolToStr(ASostituzioni[I].VecchioIsMateriaPrima, True), ASostituzioni[I].VecchioComponenteID]);
 
-    // Righe NUOVE, senza sostituire nulla: accodate DOPO le righe
-    // ereditate/sostituite qui sopra, non intrecciate con esse - l'ordine
-    // finale non e' significativo per il calcolo (costo e allergeni sono
-    // entrambi somme/unioni non ordinate), solo per la leggibilita' di chi
-    // ispeziona il risultato grezzo.
+    // Righe nuove accodate dopo quelle ereditate/sostituite: l'ordine non conta per il
+    // calcolo (somme e unioni), solo per chi legge il risultato grezzo.
     for I := 0 to High(AAggiunte) do
     begin
       LAggiunta := AAggiunte[I];
 
-      // Vedi il commento su TAggiuntaComponente: qui, a differenza di una
-      // sostituzione, non c'e' un componente di partenza da cui ereditare
-      // quantita'/unita' se il chiamante le lascia vuote - meglio fallire
-      // subito con un messaggio chiaro che scrivere una riga a dose zero.
+      // Come TAggiuntaComponente: qui non c'e' un componente da cui ereditare quantita' e
+      // unita'; meglio fallire con un messaggio chiaro che scrivere una riga a dose zero.
       if Trim(LAggiunta.UnitaMisuraDose) = '' then
         raise Exception.CreateFmt(
           'CalcolaRigheFinali: l''aggiunta del componente (isMateriaPrima=%s, id=%d) non ' +
@@ -624,14 +481,9 @@ begin
       LRisultato.Add(LRigaFinale);
     end;
 
-    // Nessun componente (stesso tipo+id) puo' comparire due volte fra le
-    // righe finali: segnale di una richiesta ambigua (due sostituzioni
-    // verso lo stesso nuovo componente, un'aggiunta che duplica un
-    // componente gia' in ricetta o gia' introdotto da un'altra
-    // sostituzione/aggiunta) - meglio fallire subito con un messaggio
-    // chiaro che scrivere una riga doppia in silenzio (o, peggio, lasciare
-    // che sia il DB a rifiutarla con un errore di vincolo illeggibile per
-    // il modello).
+    // Nessun componente (tipo+id) due volte fra le righe finali: segnale di richiesta
+    // ambigua. Meglio un messaggio chiaro che una riga doppia in silenzio o un errore di
+    // vincolo del DB illeggibile per il modello.
     for I := 0 to LRisultato.Count - 1 do
       for J := I + 1 to LRisultato.Count - 1 do
         if (LRisultato[I].IsComponenteMateriaPrima = LRisultato[J].IsComponenteMateriaPrima) and
@@ -647,20 +499,12 @@ begin
   end;
 end;
 
-// Costo totale delle righe finali: stessa somma quantita*costo_unitario
-// di CalcolaCostoRicettaProdottoFinito, ma su un TArray<TRigaFinale>
-// invece che su TObjectList<TRicettaProdottoFinitoRiga> - cosi' funziona
-// sia sulle righe COSI' COME SONO OGGI sia su quelle gia' sostituite,
-// senza bisogno di due implementazioni.
-//
-// ACostoCompleto (out): False se almeno una riga e' un componente
-// semilavorato - il suo costo non e' calcolabile (schema senza resa di
-// produzione, vedi il commento in testa a
-// TServizioRicette.CalcolaCostoRicettaProdottoFinito) e viene escluso da
-// Result invece di stimarlo. Il chiamante (SimulaAdattamentoRicetta/
-// ApplicaAdattamentoRicetta) deve propagare questo flag, non ignorarlo:
-// un delta di costo calcolato solo sulle materie prime di una ricetta
-// che contiene anche semilavorati non e' il vero delta economico.
+// Costo totale delle righe finali: stessa somma di CalcolaCostoRicettaProdottoFinito ma su
+// TArray<TRigaFinale>, per righe sia attuali sia gia' sostituite.
+// ACostoCompleto (out): False se una riga e' un semilavorato, il cui costo non e'
+// calcolabile (vedi TCostoComponenteRicetta.CostoDisponibile) ed e' escluso da Result. Il
+// chiamante deve propagare il flag: un delta sulle sole materie prime non e' il vero delta
+// economico.
 function CalcolaCostoRighe(const ARigheFinali: TArray<TRigaFinale>;
   out ACostoCompleto: Boolean): Currency;
 var
@@ -676,13 +520,9 @@ begin
       ACostoCompleto := False;
 end;
 
-// Unione (deduplicata per id) degli allergeni di tutte le righe finali:
-// l'insieme di allergeni "derivato dalla ricetta" che finirebbe in
-// etichetta se quella ricetta diventasse quella di un prodotto reale.
-// Ogni TAllergene nel risultato e' una COPIA nuova (non un riferimento
-// preso in prestito dalle liste temporanee lette per ogni componente,
-// che vengono liberate riga per riga) - Result e' quindi proprietario di
-// tutto cio' che contiene, un normale TObjectList(True).
+// Unione (senza doppioni per id) degli allergeni delle righe finali: quelli che finirebbero
+// in etichetta. Ogni TAllergene e' una copia nuova (le liste temporanee per componente
+// vengono liberate), quindi Result possiede tutto (TObjectList(True)).
 function CalcolaAllergeniRighe(const ARigheFinali: TArray<TRigaFinale>): TObjectList<TAllergene>;
 var
   LRiga: TRigaFinale;
@@ -725,12 +565,9 @@ begin
   end;
 end;
 
-// Elementi di AInsieme il cui id NON compare in ADaEscludere. Lista NON
-// proprietaria (Create(False)): contiene RIFERIMENTI ad oggetti posseduti
-// da AInsieme, che deve restare vivo per tutta la vita del risultato -
-// in TSimulazioneAdattamento e' cosi' per costruzione (AllergeniAttuali/
-// AllergeniSimulati vivono quanto AllergeniRimossi/AllergeniAggiunti,
-// stesso oggetto contenitore, vedi il distruttore sopra).
+// Elementi di AInsieme il cui id non e' in ADaEscludere. Lista non proprietaria
+// (Create(False)): riferimenti a oggetti di AInsieme, che deve vivere quanto il risultato
+// (in TSimulazioneAdattamento, come AllergeniAttuali/AllergeniSimulati).
 function SottraiAllergeni(AInsieme, ADaEscludere: TObjectList<TAllergene>): TObjectList<TAllergene>;
 var
   LAllergene, LAltro: TAllergene;
@@ -751,18 +588,11 @@ begin
   end;
 end;
 
-// Esegue la query filtrata (testo + allergene da escludere, entrambi
-// opzionali) su UNA delle due anagrafiche componente e accumula i
-// candidati in ADestinazione. ATabella e' il nome della tabella
-// anagrafica, ATabellaPonte quello della tabella ponte *_allergeni
-// corrispondente, AColonnaFK la sua colonna FK verso l'anagrafica -
-// stessi tre valori concettuali gia' usati da TAllergene.GetPerEntita/
-// SetPerEntita per la stessa ragione (evitare di duplicare la query per
-// materie prime e semilavorati, che sono strutturalmente identiche).
-// Il filtro allergene e' un NOT EXISTS invece di un JOIN+filtro: piu'
-// leggibile per "nessuna riga della tabella ponte con questo allergene",
-// e non rischia di duplicare righe se in futuro si filtrasse per PIU' di
-// un allergene contemporaneamente.
+// Query filtrata (testo + allergene da escludere, opzionali) su una delle due anagrafiche
+// componente, accumulando i candidati in ADestinazione. ATabella, ATabellaPonte e
+// AColonnaFK come in TAllergene.GetPerEntita/SetPerEntita, per non duplicare la query fra
+// materie prime e semilavorati. Il filtro allergene e' un NOT EXISTS e non JOIN+filtro:
+// piu' leggibile e senza righe duplicate se in futuro si filtrasse per piu' allergeni.
 procedure AggiungiCandidatiComponente(ADestinazione: TObjectList<TCandidatoComponente>;
   AIsMateriaPrima: Boolean; const ATabella, ATabellaPonte, AColonnaFK: string;
   AAllergeneEsclusoID: Integer; const ATesto: string);
@@ -806,11 +636,8 @@ begin
       LCandidato.Denominazione := LAutoQuery.Query.FieldByName('denominazione').AsString;
       LCandidato.Allergeni := TServizioRicette.GetAllergeniComponente(AIsMateriaPrima, LCandidato.ID);
 
-      // Giacenza aggregata del candidato - vedi il commento su
-      // TCandidatoComponente.GiacenzaDisponibile per il perche' e' solo
-      // informativa. Stessa classe TServizioGiacenza gia' usata dallo
-      // scenario di ritiro/richiamo e dalle interrogazioni vendite: nessun
-      // nuovo accesso al DB scritto da zero qui.
+      // Giacenza aggregata del candidato, solo informativa
+      // (TCandidatoComponente.GiacenzaDisponibile). Riusa TServizioGiacenza.
       if AIsMateriaPrima then
         LCandidato.GiacenzaDisponibile :=
           TServizioGiacenza.GiacenzaDisponibileMateriaPrima(LCandidato.ID)
@@ -826,12 +653,9 @@ begin
   end;
 end;
 
-// Fattore di conversione di AUnita rispetto alla sua unita' "base"
-// (grammo per la massa, millilitro per il volume, il pezzo stesso per
-// 'pz'): quanti AUnita servono a fare 1 unita' base... in realta' usato
-// nell'altro verso in ConvertiQuantita, vedi li'. Tabella aperta a nuove
-// unita' se il gestionale ne introducesse altre (es. 'cl'): un solo
-// punto da modificare.
+// Fattore di conversione di AUnita rispetto all'unita' base (grammo per la massa,
+// millilitro per il volume, il pezzo per 'pz'), usato in ConvertiQuantita. Tabella aperta a
+// nuove unita' (es. 'cl'): un solo punto da modificare.
 function FattoreConversione(const AUnita: string): Currency;
 var
   LUnita: string;
@@ -847,10 +671,8 @@ begin
       '(attese: g, kg, ml, l, pz).', [AUnita]);
 end;
 
-// Famiglia fisica di un'unita' di misura: due unita' sono convertibili
-// tra loro solo se appartengono alla stessa famiglia - non ha senso
-// "convertire" grammi in litri, ed e' un segnale di dato di ricetta/DDT
-// incoerente se qualcuno ci prova.
+// Famiglia fisica di un'unita': convertibili solo unita' della stessa famiglia. Convertire
+// grammi in litri indica un dato di ricetta o DDT incoerente.
 function FamigliaUnita(const AUnita: string): string;
 var
   LUnita: string;
@@ -868,15 +690,10 @@ begin
       '(attese: g, kg, ml, l, pz).', [AUnita]);
 end;
 
-// Converte AQuantita, espressa in ADaUnita, nell'equivalente quantita'
-// in AAUnita (es. ConvertiQuantita(1, 'g', 'kg') = 0.001). E' la
-// funzione che risolve il problema all'origine del bug di costo
-// individuato nello scenario 3: una dose di ricetta in grammi e un
-// prezzo materia prima al kg non sono direttamente moltiplicabili -
-// vanno prima ricondotti alla stessa unita'. Se ADaUnita e AAUnita non
-// sono della stessa grandezza fisica (vedi FamigliaUnita) solleva
-// un'eccezione invece di produrre silenziosamente un numero senza
-// senso.
+// Converte AQuantita da ADaUnita ad AAUnita (ConvertiQuantita(1, 'g', 'kg') = 0.001).
+// Risolve il bug di costo dello scenario 3: una dose in grammi e un prezzo al kg non si
+// moltiplicano direttamente. Solleva un'eccezione se le unita' non sono della stessa
+// grandezza (FamigliaUnita).
 function ConvertiQuantita(AQuantita: Currency; const ADaUnita, AAUnita: string): Currency;
 begin
   if SameText(Trim(ADaUnita), Trim(AAUnita)) then
@@ -889,8 +706,6 @@ begin
 
   Result := (AQuantita * FattoreConversione(ADaUnita)) / FattoreConversione(AAUnita);
 end;
-
-{ TServizioRicette }
 
 class function TServizioRicette.CostoUnitarioMateriaPrima(AMateriaPrimaID: Integer;
   const AUnitaMisuraRichiesta: string): Currency;
@@ -905,11 +720,9 @@ begin
     begin
       LPrezzo := LAutoQuery.Query.FieldByName('prezzo_unitario').AsCurrency;
       LUnitaAcquisto := LAutoQuery.Query.FieldByName('unita_misura').AsString;
-      // LPrezzo e' un costo per 1 LUnitaAcquisto (es. euro/kg): per
-      // ottenere il costo per 1 AUnitaMisuraRichiesta (es. euro/g) lo si
-      // moltiplica per "quanti LUnitaAcquisto c'e' in 1
-      // AUnitaMisuraRichiesta" (es. 1 g = 0.001 kg -> 1.2 euro/kg *
-      // 0.001 = 0.0012 euro/g).
+      // LPrezzo e' per 1 LUnitaAcquisto (euro/kg): per avere il costo per 1
+      // AUnitaMisuraRichiesta (euro/g) si moltiplica per quanti LUnitaAcquisto stanno in 1
+      // AUnitaMisuraRichiesta (1 g = 0.001 kg: 1.2 euro/kg * 0.001 = 0.0012 euro/g).
       Exit(LPrezzo * ConvertiQuantita(1, AUnitaMisuraRichiesta, LUnitaAcquisto));
     end;
   finally
@@ -965,12 +778,8 @@ begin
         LComponente.QuantitaStandard := LRiga.QuantitaStandard;
         LComponente.UnitaMisuraDose := LRiga.UnitaMisuraDose;
 
-        // Denominazione: una lettura in piu' per riga (accettabile, una
-        // ricetta ha poche righe), ma necessaria - senza il nome leggibile
-        // il chiamante (in particolare il tool MCP get_ricetta_prodotto_
-        // finito, che espone questo DTO al modello) vedrebbe solo un id
-        // numerico nudo, inutilizzabile per proporre una sostituzione
-        // all'utente in linguaggio naturale.
+        // Denominazione: una lettura in piu' per riga (le righe sono poche), ma senza il
+        // nome leggibile il modello (get_ricetta_prodotto_finito) vedrebbe solo un id.
         if LRiga.IsComponenteMateriaPrima then
         begin
           LComponente.ComponenteID := LRiga.MateriaPrimaID;
@@ -987,13 +796,9 @@ begin
         end
         else
         begin
-          // Componente = un semilavorato: costo NON calcolabile (vedi il
-          // commento su TCostoComponenteRicetta.CostoDisponibile - manca
-          // la resa di produzione nello schema attuale). Si mostra
-          // comunque la riga (denominazione, quantita', unita') perche'
-          // resta utile sapere COSA c'e' in ricetta anche senza saperne
-          // il costo, ma CostoUnitario/CostoTotale restano a 0 e NON
-          // entrano nel totale della ricetta.
+          // Componente semilavorato: costo non calcolabile (manca la resa di produzione,
+          // vedi CostoDisponibile). La riga si mostra comunque (denominazione, quantita',
+          // unita'), ma CostoUnitario/CostoTotale restano 0 e fuori dal totale.
           LComponente.ComponenteID := LRiga.SemilavoratoID;
           LComponente.CostoDisponibile := False;
           LComponente.CostoUnitario := 0;
@@ -1068,10 +873,8 @@ begin
         end
         else
         begin
-          // Componente = un ALTRO semilavorato (distinta base multi-
-          // livello): stesso limite del ramo gemello in
-          // CalcolaCostoRicettaProdottoFinito, costo non disponibile
-          // senza la resa di produzione del figlio.
+          // Semilavorato in un semilavorato (distinta multi-livello): costo non disponibile
+          // come sopra.
           LComponente.ComponenteID := LRiga.SemilavoratoFiglioID;
           LComponente.CostoDisponibile := False;
           LComponente.CostoUnitario := 0;
@@ -1100,13 +903,10 @@ begin
 end;
 
 const
-  // UNION ALL fra le ricette correnti (valida_al IS NULL) di prodotti
-  // finiti e di semilavorati, con il numero di righe di ciascuna
-  // (subquery COUNT, piu' leggera di un JOIN+GROUP BY per un dato che ci
-  // serve solo come conteggio). La colonna letterale 'prodotto_finito'/
-  // 'semilavorato' e' cio' che permette al chiamante Delphi di
-  // distinguere le due meta' del risultato senza dover interrogare due
-  // dataset separati.
+  // UNION ALL fra le ricette correnti (valida_al IS NULL) di prodotti finiti e
+  // semilavorati, con il numero di righe (subquery COUNT, piu' leggera di JOIN+GROUP BY per
+  // un solo conteggio). La colonna letterale 'prodotto_finito'/'semilavorato' distingue le
+  // due meta' del risultato.
   SQL_RICETTE_CORRENTI =
     'SELECT ''prodotto_finito'' AS tipo, pf.id AS entita_id, pf.codice, pf.denominazione, ' +
     'r.id AS ricetta_id, r.versione, r.valida_dal, r.creato_da, r.note, ' +
@@ -1289,20 +1089,17 @@ begin
   LAllergeniDaEscludere := nil;
   LVarianteCompatibile := nil;
   try
-    // Una variante si aggancia sempre al prodotto RADICE, mai a un'altra
-    // variante (vedi il commento su TProdottoFinito.ProdottoFinitoPadreID):
-    // se si sta ulteriormente adattando una variante gia' esistente, la
-    // nuova variante risultante resta comunque figlia dello stesso
-    // prodotto originale, non "nipote".
+    // Una variante si aggancia sempre al prodotto radice, mai a un'altra variante
+    // (ProdottoFinitoPadreID): adattando una variante, la nuova resta figlia
+    // dell'originale, non "nipote".
     if LProdottoOrigine.ProdottoFinitoPadreID <> 0 then
       LProdottoRadiceID := LProdottoOrigine.ProdottoFinitoPadreID
     else
       LProdottoRadiceID := AProdottoFinitoID;
 
-    // --- Fase 1 (sola lettura): stesso calcolo di SimulaAdattamentoRicetta,
-    // ripetuto qui (non richiamato direttamente) perche' oltre ai numeri
-    // aggregati servono anche le righe finali GREZZE (LRigheFinali), da
-    // scrivere se si decide di creare una nuova variante.
+    // Fase 1 (sola lettura): stesso calcolo di SimulaAdattamentoRicetta, ripetuto perche'
+    // servono anche le righe finali grezze (LRigheFinali) da scrivere per una nuova
+    // variante.
     LRicetta := TRicettaProdottoFinito.GetCorrente(AProdottoFinitoID);
     if LRicetta = nil then
       raise Exception.CreateFmt(
@@ -1313,10 +1110,9 @@ begin
       LRighe := TRicettaProdottoFinitoRiga.GetByRicetta(LRicetta.ID);
       try
         LAllergeniAttuali := CalcolaAllergeniRighe(RigheToFinali(LRighe));
-        // Valida qui, PRIMA di ogni scrittura: se una sostituzione non
-        // trova il suo componente nella ricetta di partenza, o un'aggiunta
-        // non specifica quantita'/unita', l'eccezione interrompe tutto
-        // senza aver toccato il DB.
+        // Si valida prima di ogni scrittura: se una sostituzione non trova il suo
+        // componente o un'aggiunta non ha quantita'/unita', l'eccezione interrompe tutto
+        // senza toccare il DB.
         LRigheFinali := CalcolaRigheFinali(LRighe, ASostituzioni, AAggiunte);
       finally
         LRighe.Free;
@@ -1328,28 +1124,21 @@ begin
     LAllergeniSimulati := CalcolaAllergeniRighe(LRigheFinali);
     LAllergeniDaEscludere := SottraiAllergeni(LAllergeniAttuali, LAllergeniSimulati);
 
-    // --- Fase 2: esiste gia' una variante compatibile? -------------------
-    // "Compatibile" = una variante (figlia dello stesso prodotto radice)
-    // la cui etichetta ATTUALE (anagrafiche_prodotti_finiti_allergeni, il
-    // dato ufficiale gia' salvato per un prodotto reale) non contiene
-    // NESSUNO degli allergeni che questo adattamento sta togliendo. Non
-    // serve un confronto di uguaglianza totale degli insiemi: se l'utente
-    // ha chiesto "senza lattosio", una variante che gia' non contiene
-    // lattosio va bene anche se differisce per altri dettagli di ricetta
-    // - evitare quel duplicato e' esattamente lo scopo di questo controllo.
-    // Se l'adattamento non toglie nessun allergene (caso raro: sostituzione
-    // "di gusto", non dietetica) il controllo non ha nulla da escludere e
-    // si procede sempre a creare una nuova variante.
+    // Fase 2: esiste gia' una variante compatibile? E' compatibile una variante (figlia
+    // dello stesso radice) la cui etichetta attuale (anagrafiche_prodotti_finiti_allergeni)
+    // non contiene nessuno degli allergeni che l'adattamento toglie. Basta questo e non
+    // l'uguaglianza degli insiemi: per "senza lattosio" va bene una variante gia' senza
+    // lattosio anche se differisce per altro, ed evitare quel duplicato e' lo scopo. Se non
+    // toglie allergeni (adattamento di gusto) non c'e' nulla da escludere e si crea sempre
+    // una variante nuova.
     if LAllergeniDaEscludere.Count > 0 then
     begin
       LVarianti := TProdottoFinito.GetVarianti(LProdottoRadiceID);
       try
         for LVariante in LVarianti do
         begin
-          // ATTENZIONE: l'id passato qui e' quello della VARIANTE candidata
-          // (LVariante.ID), non LProdottoRadiceID - vogliamo gli allergeni
-          // di CIASCUNA variante che stiamo esaminando, non sempre quelli
-          // del prodotto radice.
+          // Qui serve l'id della variante candidata (LVariante.ID), non LProdottoRadiceID:
+          // si vogliono gli allergeni di ciascuna variante esaminata.
           LAllergeniVariante := LVariante.GetAllergeni(LVariante.ID);
           try
             LCompatibile := True;
@@ -1363,10 +1152,8 @@ begin
 
           if LCompatibile then
           begin
-            // Copia indipendente (non il riferimento posseduto da
-            // LVarianti, che viene liberato qui sotto): deve sopravvivere
-            // oltre la fine di questo blocco try, fino a dopo essere stata
-            // travasata in Result.
+            // Copia indipendente: il riferimento in LVarianti viene liberato qui sotto e
+            // deve sopravvivere fino al travaso in Result.
             LVarianteCompatibile := TProdottoFinito.GetByID(LVariante.ID);
             Break;
           end;
@@ -1391,7 +1178,7 @@ begin
       Exit;
     end;
 
-    // --- Fase 3: nessuna variante compatibile, se ne crea una nuova ------
+    // Fase 3: nessuna variante compatibile, se ne crea una.
     if (Trim(ACodiceNuovoProdotto) = '') or (Trim(ADenominazioneNuovoProdotto) = '') then
       raise Exception.Create(
         'ApplicaAdattamentoRicetta: nessuna variante compatibile esistente - servono ' +
@@ -1405,19 +1192,16 @@ begin
       LNuovoProdotto.ProdottoFinitoPadreID := LProdottoRadiceID;
       LNuovoProdotto.Insert;
 
-      // Etichetta del nuovo prodotto impostata SUBITO, non lasciata vuota
-      // fino a un aggiornamento manuale successivo: e' il dato che finisce
-      // in etichetta ai sensi del Reg. UE 1169/2011, e coincide per
-      // costruzione con gli allergeni derivati dalla ricetta appena creata.
+      // Etichetta del nuovo prodotto impostata subito, non lasciata vuota (finisce in
+      // etichetta, Reg. UE 1169/2011): coincide per costruzione con gli allergeni derivati
+      // dalla ricetta appena creata.
       SetLength(LAllergeniSimulatiIDs, LAllergeniSimulati.Count);
       for I := 0 to LAllergeniSimulati.Count - 1 do
         LAllergeniSimulatiIDs[I] := LAllergeniSimulati[I].ID;
       TProdottoFinito.SetAllergeni(LNuovoProdotto.ID, LAllergeniSimulatiIDs);
 
-      // Prima (e unica, per ora) versione di ricetta del nuovo prodotto:
-      // GetCorrente(nuovo id) e' certamente nil, quindi CreaNuovaVersione
-      // esegue il ramo "semplice Insert" - lo stesso metodo gia' usato per
-      // il versionamento in-place, riusato qui senza alcuna modifica.
+      // Prima versione di ricetta del nuovo prodotto: GetCorrente(nuovo id) e' nil, quindi
+      // CreaNuovaVersione esegue il semplice Insert.
       LNuovaRicetta := TRicettaProdottoFinito.CreaNuovaVersione(LNuovoProdotto.ID, ACreatoDa, ANote);
       try
         TDB.GetInstance.ExecuteInTransaction(

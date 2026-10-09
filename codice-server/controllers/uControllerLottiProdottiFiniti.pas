@@ -10,13 +10,8 @@ uses
   uServiziLotti;
 
 type
-  // Endpoint di sola lettura dei lotti di prodotto finito (tabella
-  // lotti_prodotti_finiti). Vedi il commento gemello e piu' esteso in
-  // uControllerLottiMateriePrime.pas: stessa struttura, stessi motivi.
-  //
-  //   GET /api/lotti-prodotti-finiti
-  //   GET /api/lotti-prodotti-finiti?prodotto_finito_id=12
-  //   GET /api/lotti-prodotti-finiti/(id)
+  // Lettura dei lotti di prodotto finito. Stessa struttura di uControllerLottiMateriePrime.
+  // GET /api/lotti-prodotti-finiti, ?prodotto_finito_id=12, /(id).
   [MVCPath('/api/lotti-prodotti-finiti')]
   TControllerLottiProdottiFiniti = class(TMVCController)
   private
@@ -32,8 +27,6 @@ type
   end;
 
 implementation
-
-{ TControllerLottiProdottiFiniti }
 
 function TControllerLottiProdottiFiniti.ParamIntero(ctx: TWebContext;
   const ANome: string): Integer;

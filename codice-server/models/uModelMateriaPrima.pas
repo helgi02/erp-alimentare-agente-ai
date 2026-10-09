@@ -9,13 +9,9 @@ uses
   DbU, uModelAllergene;
 
 type
-  // Rappresenta l'anagrafica di una materia prima acquistata da fornitori
-  // esterni (tabella anagrafiche_materie_prime). E' l'entita' referenziata
-  // da ordini fornitore, DDT di entrata, lotti e righe ricetta.
-  // Nota di naming: la classe si chiama TMateriaPrima e non
-  // TAnagraficaMateriaPrima per coerenza con TFornitore/TAllergene/
-  // TStabilimento; il nome della tabella resta comunque
-  // "anagrafiche_materie_prime".
+  // Anagrafica di una materia prima acquistata (anagrafiche_materie_prime), referenziata da
+  // ordini fornitore, DDT di entrata, lotti e righe ricetta. La classe si chiama
+  // TMateriaPrima per coerenza con TFornitore/TAllergene/TStabilimento.
   TMateriaPrima = class
   private
     FID: Integer;
@@ -32,12 +28,9 @@ type
     property Codice: string read FCodice write FCodice;
     property Denominazione: string read FDenominazione write FDenominazione;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_anagrafiche_materie_prime_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TMateriaPrima;
     class function GetByCodice(const ACodice: string): TMateriaPrima;
     class function GetAll: TObjectList<TMateriaPrima>;
@@ -49,9 +42,8 @@ type
     function ToJSONObject: TJSONObject;
     procedure FromJSONObject(AJSON: TJSONObject);
 
-    // Allergeni dichiarati per questa materia prima (tabella ponte
-    // anagrafiche_materie_prime_allergeni). Wrapper sottile sulla logica
-    // condivisa in TAllergene: nessuna query duplicata qui.
+    // Allergeni dichiarati (tabella ponte anagrafiche_materie_prime_allergeni): wrapper
+    // sottile sulla logica condivisa in TAllergene.
     class function GetAllergeni(AMateriaPrimaID: Integer): TObjectList<TAllergene>;
     class procedure SetAllergeni(AMateriaPrimaID: Integer; const AAllergeneIDs: TArray<Integer>);
 
@@ -63,8 +55,6 @@ const
   SQL_SELECT_BASE =
     'SELECT id, codice, denominazione, creato_il, aggiornato_il ' +
     'FROM anagrafiche_materie_prime ';
-
-{ TMateriaPrima }
 
 constructor TMateriaPrima.Create;
 begin
@@ -104,9 +94,8 @@ class function TMateriaPrima.GetByCodice(const ACodice: string): TMateriaPrima;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // codice ha un vincolo UNIQUE (anagrafiche_materie_prime_codice_key):
-  // e' il codice interno con cui operatori e tool MCP identificano la
-  // materia prima senza dover conoscere l'id numerico interno.
+  // codice e' UNIQUE (anagrafiche_materie_prime_codice_key): e' il codice interno con cui
+  // operatori e tool MCP la identificano.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -129,8 +118,7 @@ var
 begin
   Result := TObjectList<TMateriaPrima>.Create(True); // possiede gli oggetti
 
-  // L'ordinamento per denominazione sfrutta l'indice
-  // idx_anagrafiche_materie_prime_denominazione gia' presente sul DB.
+  // L'ordine per denominazione usa l'indice idx_anagrafiche_materie_prime_denominazione.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'ORDER BY denominazione');
   try
@@ -148,10 +136,8 @@ end;
 
 class function TMateriaPrima.Delete(AID: Integer): Boolean;
 begin
-  // Materia prima e' referenziata da ordini fornitore, DDT entrata, lotti
-  // materie prime e righe ricetta: in assenza di ON DELETE CASCADE lato
-  // DB, la query fallisce se esistono record collegati. Comportamento
-  // voluto: una materia prima gia' movimentata non va cancellata.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM anagrafiche_materie_prime WHERE id = :id', [AID]);
 end;
@@ -160,10 +146,8 @@ function TMateriaPrima.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti:
-  // sono valorizzati dal DEFAULT del database (now()).
-  // codice ha un vincolo UNIQUE: un eventuale duplicato solleva
-  // un'eccezione da gestire a livello di controller.
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO anagrafiche_materie_prime (codice, denominazione) ' +
     'VALUES (:codice, :denominazione) ' +
@@ -183,9 +167,7 @@ function TMateriaPrima.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_anagrafiche_materie_prime_aggiornato_il lo valorizza
-  // automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE anagrafiche_materie_prime SET codice = :codice, ' +
     'denominazione = :denominazione ' +
@@ -224,8 +206,7 @@ end;
 
 procedure TMateriaPrima.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in ingresso:
-  // sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('codice', FCodice) then ;
   if AJSON.TryGetValue<string>('denominazione', FDenominazione) then ;
 end;

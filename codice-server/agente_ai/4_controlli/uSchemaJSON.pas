@@ -1,36 +1,16 @@
 unit uSchemaJSON;
 
-(* ============================================================================
-  SCHEMA JSON - tappa 3 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/schema.py
-  (specifica: CONTRATTI.md, paragrafo 2).
-
-  Il sottoinsieme di JSON Schema usato per gli input e gli output dei tool,
-  volutamente minimo: solo cio' che i contratti dei tool usano davvero
-  (vedi agente_ai/tool/uContrattiTool.pas e le sezioni "CONTRATTI" dei provider).
-
-    type        object | array | string | integer | number | boolean
-    object      properties, required   (senza properties = oggetto libero)
-    array       items, minItems        (senza items = elementi liberi)
-    string      enum, minLength, format = "date" (AAAA-MM-GG, data esistente)
-    integer/number   minimum
-
-  Due funzioni:
-    ValidaSchema   controlla un valore contro uno schema e restituisce TUTTI
-                   gli errori trovati (lista vuota = conforme). Non si ferma
-                   al primo: il validatore del piano li riporta insieme.
-    Assegnabile    True se un valore del tipo "sorgente" puo' essere passato
-                   cosi' com'e' a un parametro del tipo "destinazione". Serve
-                   per i riferimenti fra i passi di un piano: il tipo del
-                   campo letto dal passo N deve andare bene per il parametro
-                   del passo che lo usa.
-
-  Regole che non sono ovvie:
-    - null non e' ammesso da nessuno schema;
-    - un intero e' anche un numero (non e' una conversione), il contrario no:
-      "12.0" non e' un integer;
-    - nessuna conversione di tipo: la stringa "12" non e' un integer.
-  ============================================================================ *)
+// Sottoinsieme di JSON Schema per input e output dei tool, volutamente minimo (vedi
+// uContrattiTool.pas):
+// type: object, array, string, integer, number, boolean. object: properties, required
+// (senza properties = oggetto libero). array: items, minItems (senza items = elementi
+// liberi). string: enum, minLength, format "date" (AAAA-MM-GG, data esistente).
+// integer/number: minimum.
+// ValidaSchema controlla un valore contro uno schema e restituisce TUTTI gli errori (lista
+// vuota = conforme). Assegnabile dice se un valore del tipo sorgente puo' andare cosi'
+// com'e' a un parametro del tipo destinazione (serve per i riferimenti fra passi).
+// Regole non ovvie: null non e' ammesso da nessuno schema; un intero e' anche un numero ma
+// non viceversa ("12.0" non e' integer); nessuna conversione di tipo ("12" non e' integer).
 
 interface
 
@@ -39,11 +19,9 @@ uses
   System.JSON,
   System.Generics.Collections;
 
-// Tipo JSON di un valore, con i nomi di JSON Schema: 'object', 'array',
-// 'string', 'integer', 'number', 'boolean'. Stringa vuota per null (o nil).
-// Un numero e' 'integer' se e' scritto senza parte decimale ne' esponente
-// (118 si', 118.0 e 1e2 no): e' la stessa distinzione che fa Python fra
-// int e float leggendo un JSON.
+// Tipo JSON di un valore con i nomi di JSON Schema ('object', 'array', 'string', 'integer',
+// 'number', 'boolean'); '' per null o nil. Un numero e' 'integer' se scritto senza parte
+// decimale ne' esponente (118 si', 118.0 e 1e2 no).
 function TipoJSON(AValore: TJSONValue): string;
 
 // Valore testuale del campo ANome di AOggetto ('' se assente o AOggetto nil).
@@ -54,7 +32,7 @@ function TestoCampo(AOggetto: TJSONObject; const ANome: string): string;
 function ValidaSchema(AValore: TJSONValue; ASchema: TJSONObject;
   const APercorso: string = ''): TArray<string>;
 
-// Regola di assegnabilita' (CONTRATTI.md paragrafo 2).
+// Regola di assegnabilita' fra tipi (vedi l'intestazione).
 function Assegnabile(ASorgente, ADestinazione: TJSONObject): Boolean;
 
 implementation

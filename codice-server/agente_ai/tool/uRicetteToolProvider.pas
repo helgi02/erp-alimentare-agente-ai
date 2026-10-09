@@ -1,101 +1,33 @@
 ﻿unit uRicetteToolProvider;
 
-(* ============================================================================
-  TRicetteToolProvider — tool MCP per lo scenario 3 del tirocinio
-  (adattamento ricette su richiesta cliente con calcolo economico
-  multi-turno). Quattro tool, un solo file/classe, registrata come
-  provider "dinamico" (RegisterDynamicProvider, non RegisterToolProvider)
-  per lo stesso motivo di TFilesToolsProvider/TNavigazioneToolProvider: i
-  parametri "sostituzioni" e "aggiunte" di simula_adattamento_ricetta/
-  applica_adattamento_ricetta sono ARRAY veri di oggetti, non esprimibili
-  con gli attributi [MCPTool]/[MCPParam] via RTTI (vedi il commento in
-  testa a uFilesToolsProvider.pas sul perche'). get_ricetta_prodotto_finito
-  e cerca_componenti_ricetta avrebbero potuto restare RTTI (parametri
-  tutti scalari), ma stanno comunque qui: un solo provider per scenario,
-  con un solo punto di registrazione in uFrmMain, invece di spezzare uno
-  scenario su piu' classi per un motivo puramente tecnico che al modello
-  non deve interessare.
-
-  ── I quattro tool, in ordine d'uso tipico ───────────────────────────────────
-  1. get_ricetta_prodotto_finito (sola lettura): mostra i componenti della
-     ricetta CORRENTE di un prodotto finito (tipo, id, denominazione,
-     quantita', unita', costo) E, per ciascuno, gli allergeni che porta
-     (codice + denominazione, stessa forma usata dai candidati del tool
-     successivo). E' il punto di partenza indispensabile: senza sapere
-     cosa c'e' davvero in ricetta oggi - e QUALE componente porta
-     l'allergene da togliere - ne' il modello ne' l'utente potrebbero
-     scegliere in modo sensato quale componente sostituire nei tool
-     successivi. Prima di questa aggiunta il modello doveva INDOVINARE
-     quale componente contenesse l'allergene (per nome: "crema" suona
-     lattiero, "impasto" no) e scoprirlo solo a posteriori dal risultato
-     di simula_adattamento_ricetta - osservato in pratica con Qwen 9B
-     locale: 8 iterazioni consumate a tentativi su nomi plausibili prima
-     di arrivare a una simulazione utile. Il codice allergene di ciascun
-     componente e' esattamente il valore da passare come
-     escludi_allergene_codice al tool successivo. Il risultato porta anche
-     un campo "apertura_vista" ({"vista":"ricetta_prodotto_finito",
-     "parametri":{"prodotto_finito_id":...}}) che il FRONTEND apre da solo
-     (components/chat.js, aggiungiAperturaVista), senza che il modello
-     debba chiamare apri_vista di sua iniziativa: un LLM locale piccolo che
-     deve incatenare una seconda tool_use subito dopo la prima, nello
-     stesso turno, si e' rivelato inaffidabile in pratica (anche con
-     un'istruzione esplicita "SEMPRE" in description) - per un'azione che
-     deve avvenire OGNI volta (mostrare la ricetta di PARTENZA mentre
-     l'utente sceglie le sostituzioni nel form dedicato) e' piu' robusto
-     incorporarla nel risultato di questo tool, che viene comunque chiamato
-     per primo sempre, invece di dipendere da una seconda iniziativa del
-     modello.
-  2. cerca_componenti_ricetta: dato un vincolo dietetico (es. "escludi
-     l'allergene LAT" - il codice va preso dall'array "allergeni" del
-     componente da sostituire, restituito da get_ricetta_prodotto_finito),
-     restituisce le materie prime/semilavorati che lo rispettano - i
-     candidati fra cui scegliere il sostituto. UNA SOLA chiamata, SENZA
-     tipo_componente ne' testo, copre gia' TUTTI i componenti della
-     ricetta che portano quell'allergene: il vincolo e' l'allergene, non
-     il componente da sostituire, quindi lo stesso elenco di candidati
-     serve per scegliere il sostituto di ognuno (anche se in ricetta sono
-     piu' di uno - es. sia il burro sia la panna se il vincolo e' "senza
-     lattosio"). Anche questo e' un correttivo osservato in pratica: senza
-     questa precisazione esplicita nella description, il modello richiama
-     il tool una volta per componente (o con filtri via via diversi),
-     moltiplicando le chiamate per un dato che una singola interrogazione
-     restituisce gia' per intero.
-  3. simula_adattamento_ricetta (Turno 1, sola lettura): dato un prodotto
-     finito, uno o piu' "sostituisci X con Y" e/o "aggiungi Z" insieme,
-     calcola il delta di costo e come cambierebbe l'elenco di allergeni,
-     SENZA scrivere nulla. "sostituzioni" copre il caso "togli questo,
-     mettine un altro" (un componente della ricetta scompare, un altro lo
-     rimpiazza); "aggiunte" copre il caso "in piu', metti anche questo"
-     (nessun componente scompare - es. uno stabilizzante reso necessario
-     da un'altra sostituzione, che nella ricetta originale non c'era
-     affatto). Sono array indipendenti, entrambi opzionali ma non
-     entrambi vuoti insieme: si possono usare singolarmente o combinati
-     nella stessa chiamata. I componenti della ricetta NON menzionati in
-     nessuno dei due restano automaticamente invariati nel risultato - il
-     modello non deve mai rielencare l'intera ricetta, solo cio' che
-     cambia. Il modello mostra questo risultato all'utente e chiede
-     conferma prima di procedere.
-  4. applica_adattamento_ricetta (Turno 2, scrittura, SOLO dopo conferma
-     esplicita dell'utente): riesegue lo stesso calcolo e lo scrive
-     davvero - ma mai sul prodotto di partenza. Cerca prima una variante
-     dietetica gia' esistente (stesso prodotto radice, etichetta gia'
-     priva degli allergeni tolti); se non la trova, crea un nuovo prodotto
-     finito con la sua prima versione di ricetta. Tutta la logica di
-     dominio (dove si aggancia una variante, quando riusarne una invece
-     di duplicarla) vive in TServizioRicette.ApplicaAdattamentoRicetta:
-     qui c'e' solo l'adattatore JSON <-> Servizio (vedi uMCPToolProvider.pas).
-
-  ── Risoluzione del prodotto: id o nome, stesso schema di get_list_vendite ──
-  Ciascuno dei tool 2 e 3 accetta prodotto_finito_id (se gia' noto, es. da
-  una chiamata precedente) OPPURE nome_prodotto (testo, anche parziale).
-  Se il nome e' ambiguo o non trovato, il tool_result e' un esito
-  "richiede_disambiguazione" con "campo": "nome_prodotto" e i candidati -
-  stessa forma gia' usata da get_list_vendite (uVenditeToolProvider.pas) e
-  gia' capita dal frontend (chat.js, aggiungiScelteDisambiguazione): un
-  campo diverso da "ragione_sociale_cliente" prende automaticamente il
-  ramo "prodotto" del rendering, quindi non serve nessuna modifica lato
-  chat.js per far comparire i bottoni di scelta anche per questo scenario.
-  ============================================================================ *)
+// Tool MCP dello scenario 3 (adattamento ricette con calcolo economico). Provider dinamico
+// perche' "sostituzioni" e "aggiunte" sono array veri di oggetti, non esprimibili via RTTI
+// (vedi uFilesToolsProvider). Anche i due tool a parametri scalari stanno qui: un provider
+// per scenario, un solo punto di registrazione.
+// 1. get_ricetta_prodotto_finito (lettura): componenti della ricetta corrente con, per
+// ciascuno, gli allergeni (codice + denominazione). Il codice e' il valore da passare come
+// escludi_allergene_codice al tool successivo: senza, il modello doveva indovinare quale
+// componente portasse l'allergene (con Qwen 9B: 8 iterazioni di tentativi). Il risultato
+// porta anche "apertura_vista", che il frontend apre da solo (chat.js,
+// aggiungiAperturaVista): un modello piccolo non incatena in modo affidabile una seconda
+// tool_use nello stesso turno, mentre questo tool viene chiamato sempre per primo.
+// 2. cerca_componenti_ricetta: materie prime/semilavorati che rispettano un vincolo
+// dietetico (es. escludi LAT). Una sola chiamata, senza tipo_componente ne' testo, copre
+// tutti i componenti che portano quell'allergene (il vincolo e' l'allergene, non il
+// componente). Va detto nella description, altrimenti il modello chiama il tool una volta
+// per componente.
+// 3. simula_adattamento_ricetta (lettura): "sostituzioni" (togli X, metti Y) e/o "aggiunte"
+// (metti anche Z), almeno una delle due. Calcola delta di costo e variazione degli
+// allergeni senza scrivere. I componenti non menzionati restano invariati: il modello non
+// rielenca la ricetta.
+// 4. applica_adattamento_ricetta (scrittura, solo dopo conferma): rifa' il calcolo e
+// scrive, mai sul prodotto di partenza. Riusa una variante dietetica esistente o crea un
+// nuovo prodotto finito con la prima ricetta. La logica e' in
+// TServizioRicette.ApplicaAdattamentoRicetta: qui solo l'adattatore JSON.
+// Prodotto per id o per nome (anche parziale), come in get_list_vendite: l'id ha la
+// precedenza. Se il nome e' ambiguo, "richiede_disambiguazione" con "campo":
+// "nome_prodotto"; il frontend (chat.js, aggiungiScelteDisambiguazione) mostra i pulsanti
+// senza modifiche.
 
 interface
 
@@ -115,20 +47,15 @@ type
     function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; override;
     function InvokeDynamic(const AToolName: string;
       AArguments: TJDOJsonObject): TMCPToolResult; override;
-    // Contratti dei tool di questo provider per il pianificatore: schema del
-    // risultato, lettura/scrittura, conferma, vincoli sugli input (vedi
-    // agente_ai/tool/uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratti dei tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
 implementation
 
-{ Funzioni di supporto, private all'unit }
-
-// 'materia_prima' -> True, 'semilavorato' -> False, qualunque altro
-// valore (incluso vuoto) e' un errore di chi ha costruito la chiamata:
-// a differenza di altri parametri opzionali di questo progetto, qui non
-// esiste un default sensato - un componente DEVE essere l'uno o l'altro.
+// 'materia_prima' -> True, 'semilavorato' -> False, altro (anche vuoto) e' un errore: un
+// componente deve essere l'uno o l'altro, non c'e' un default sensato.
 function TipoAIsMateriaPrima(const ATipo, ANomeCampo: string): Boolean;
 begin
   if SameText(ATipo, 'materia_prima') then
@@ -141,17 +68,11 @@ begin
     [ANomeCampo, ATipo]);
 end;
 
-// Legge e valida il parametro "sostituzioni", OPZIONALE: un array di
-// oggetti {vecchio_tipo, vecchio_id, nuovo_tipo, nuovo_id, nuova_quantita
-// (opzionale), nuova_unita_misura (opzionale)}. Assente del tutto -> Result
-// vuoto, NON un errore: un adattamento puo' essere fatto di sole aggiunte
-// (vedi LeggiAggiunte), senza sostituire nulla di esistente - e' il
-// chiamante (PreparaChiamataProdotto) a verificare che almeno UNA fra
-// sostituzioni e aggiunte sia presente. Le eccezioni sollevate qui sono di
-// formato (imputabili al modello): InvokeDynamic le trasforma in
-// TMCPToolResult.Error, non le lascia propagare come errore di trasporto -
-// stesso principio di LeggiDefinizioniColonne/LeggiRighe in
-// uFilesToolsProvider.pas.
+// Legge "sostituzioni" (opzionale): array di {vecchio_tipo, vecchio_id, nuovo_tipo,
+// nuovo_id, nuova_quantita?, nuova_unita_misura?}. Assente -> vuoto, non errore: un
+// adattamento puo' avere sole aggiunte. Che ce ne sia almeno una fra sostituzioni e
+// aggiunte lo verifica PreparaChiamataProdotto. Le eccezioni di formato diventano
+// TMCPToolResult.Error, come in uFilesToolsProvider.
 function LeggiSostituzioni(AArguments: TJDOJsonObject): TArray<TSostituzioneComponente>;
 var
   LArray: TJDOJsonArray;
@@ -191,23 +112,19 @@ begin
       Format('Elemento %d di "sostituzioni": "nuovo_tipo"', [I]));
     LSostituzione.NuovoComponenteID := LElemento.I['nuovo_id'];
 
-    // CONTROLLO DI DIFESA (tappa 13): un id e' sempre un intero positivo.
-    // Zero o negativo significa che il modello non aveva l'id vero.
+    // Un id e' un intero positivo: zero o negativo vuol dire che il modello non aveva l'id
+    // vero.
     if (LSostituzione.VecchioComponenteID <= 0) or (LSostituzione.NuovoComponenteID <= 0) then
       raise Exception.CreateFmt(
         'Elemento %d di "sostituzioni": "vecchio_id" e "nuovo_id" devono essere interi maggiori ' +
         'di zero, presi dalla ricetta e da cerca_componenti_ricetta.', [I]);
 
-    // Sentinelle "mantieni quella del componente sostituito", stesso
-    // principio gia' seguito da TServizioRicette.ApplicaAdattamentoRicetta
-    // (e prima ancora dal vecchio ApplicaSostituzioneIngrediente a un
-    // solo componente): 0/'' quando il chiamante non specifica un valore.
+    // Sentinelle "mantieni quella del componente sostituito": 0 / '' se non specificate.
     if LElemento.Contains('nuova_quantita') then
     begin
       LSostituzione.NuovaQuantitaStandard := LElemento.F['nuova_quantita'];
-      // CONTROLLO DI DIFESA (tappa 13): una dose negativa non ha senso e
-      // falserebbe il calcolo economico. Zero resta ammesso: e' la
-      // sentinella "mantieni la quantita' del componente sostituito".
+      // Dose negativa: priva di senso, falserebbe il calcolo. Zero e' ammesso (sentinella
+      // "mantieni la quantita'").
       if LSostituzione.NuovaQuantitaStandard < 0 then
         raise Exception.CreateFmt(
           'Elemento %d di "sostituzioni": "nuova_quantita" non puo'' essere negativa ' +
@@ -227,15 +144,9 @@ begin
   Result := LSostituzioni;
 end;
 
-// Legge e valida il parametro "aggiunte", OPZIONALE: un array di oggetti
-// {tipo, id, quantita, unita_misura} - componenti NUOVI da aggiungere alla
-// ricetta risultante, SENZA sostituire nulla di esistente (es. uno
-// stabilizzante reso necessario da un'altra sostituzione). A differenza di
-// "sostituzioni", qui "quantita" e "unita_misura" sono SEMPRE obbligatorie
-// per ogni elemento: non c'e' un componente di partenza da cui ereditarle
-// se il chiamante le omette (vedi TAggiuntaComponente in
-// uServiziRicette.pas). Assente del tutto -> Result vuoto, non un errore -
-// stesso principio di LeggiSostituzioni qui sopra.
+// Legge "aggiunte" (opzionale): array di {tipo, id, quantita, unita_misura}, componenti
+// nuovi senza sostituire nulla. Quantita e unita' sono obbligatorie: non c'e' un componente
+// da cui ereditarle (TAggiuntaComponente). Assente -> vuoto.
 function LeggiAggiunte(AArguments: TJDOJsonObject): TArray<TAggiuntaComponente>;
 var
   LArray: TJDOJsonArray;
@@ -272,7 +183,6 @@ begin
     LAggiunta.IsMateriaPrima := TipoAIsMateriaPrima(LElemento.S['tipo'],
       Format('Elemento %d di "aggiunte": "tipo"', [I]));
     LAggiunta.ComponenteID := LElemento.I['id'];
-    // CONTROLLO DI DIFESA (tappa 13): stesso principio delle sostituzioni.
     if LAggiunta.ComponenteID <= 0 then
       raise Exception.CreateFmt(
         'Elemento %d di "aggiunte": "id" deve essere un intero maggiore di zero.', [I]);
@@ -292,10 +202,8 @@ begin
   Result := LAggiunte;
 end;
 
-// Traduce un elenco di allergeni in un array JSON {codice, denominazione}
-// - usato per ogni campo "allergeni_*" dei tool_result sotto. Non porta
-// l'id interno: al modello e all'utente in chat serve il codice (GLUT,
-// LAT, ...), non una chiave tecnica.
+// Allergeni come array {codice, denominazione}, senza id interno: al modello serve il
+// codice (GLUT, LAT, ...).
 function AllergeniToJSON(AAllergeni: TObjectList<TAllergene>): TJDOJsonArray;
 var
   LAllergene: TAllergene;
@@ -310,16 +218,9 @@ begin
   end;
 end;
 
-// Risolve il prodotto finito su cui operare: prodotto_finito_id (se
-// presente) ha SEMPRE precedenza su nome_prodotto, esattamente come
-// cliente_id/prodotto_id in get_list_vendite (vedi il commento su
-// TVenditeToolProvider) - nessuna nuova ricerca testuale, quindi nessuna
-// nuova ambiguita' possibile quando l'id e' gia' noto.
-//
-// Restituisce True e AProdottoID valorizzato se la risoluzione ha
-// successo. Restituisce False se il nome e' ambiguo o non trovato: in tal
-// caso AJSONDisambiguazione (di proprieta' del CHIAMANTE, che deve
-// liberarlo) e' il tool_result gia' pronto da restituire cosi' com'e'.
+// Risolve il prodotto: prodotto_finito_id ha sempre precedenza su nome_prodotto, come in
+// get_list_vendite, senza nuova ricerca e quindi senza nuova ambiguita'. Se False,
+// AJSONDisambiguazione (da liberare a cura del chiamante) e' il tool_result gia' pronto.
 function RisolviProdottoFinito(const AProdottoFinitoIDTesto, ANomeProdotto: string;
   out AProdottoID: Integer; out AJSONDisambiguazione: TJDOJsonObject): Boolean;
 var
@@ -354,9 +255,8 @@ begin
       Exit(True);
     end;
 
-    // Ambiguo o non trovato: stessa forma "richiede_disambiguazione" gia'
-    // usata da get_list_vendite, cosi' il frontend la riconosce senza
-    // bisogno di sapere da quale tool arriva.
+    // Stessa forma "richiede_disambiguazione" di get_list_vendite, riconosciuta dal
+    // frontend.
     AJSONDisambiguazione := TJDOJsonObject.Create;
     AJSONDisambiguazione.S['esito'] := 'richiede_disambiguazione';
 
@@ -383,8 +283,6 @@ begin
     LRisoluzione.Free;
   end;
 end;
-
-{ TRicetteToolProvider }
 
 function TRicetteToolProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
 
@@ -541,14 +439,10 @@ end;
 function TRicetteToolProvider.InvokeDynamic(const AToolName: string;
   AArguments: TJDOJsonObject): TMCPToolResult;
 
-  // Comune ai due tool "prodotto": legge sostituzioni E aggiunte, verifica
-  // che almeno una delle due non sia vuota, poi risolve il prodotto, in
-  // quest'ordine (la validazione del formato non dipende dalla
-  // risoluzione del prodotto, ha senso segnalarla per prima).
-  // AProdottoID/ASostituzioni/AAggiunte sono valorizzati solo se la
-  // funzione restituisce True; se restituisce False, ARisultato e' gia'
-  // il TMCPToolResult da restituire cosi' com'e' (un errore di formato,
-  // "nessuna modifica indicata", o una richiesta di disambiguazione).
+  // Comune ai due tool "prodotto": legge sostituzioni e aggiunte, verifica che non siano
+  // entrambe vuote, poi risolve il prodotto (il formato si segnala prima). Se restituisce
+  // False, ARisultato e' gia' il TMCPToolResult da restituire (errore di formato, "nessuna
+  // modifica indicata" o disambiguazione).
   function PreparaChiamataProdotto(out AProdottoID: Integer;
     out ASostituzioni: TArray<TSostituzioneComponente>;
     out AAggiunte: TArray<TAggiuntaComponente>;
@@ -556,10 +450,7 @@ function TRicetteToolProvider.InvokeDynamic(const AToolName: string;
   var
     LJSONDisambiguazione: TJDOJsonObject;
   begin
-    // Niente "ARisultato := nil": TMCPToolResult e' un record (non una
-    // classe), quindi non e' compatibile con nil - e comunque un parametro
-    // "out" arriva gia' azzerato dal chiamante, non serve inizializzarlo
-    // a mano prima di valorizzarlo nei rami sotto.
+    // Niente "ARisultato := nil": TMCPToolResult e' un record, non compatibile con nil.
     try
       ASostituzioni := LeggiSostituzioni(AArguments);
       AAggiunte := LeggiAggiunte(AArguments);
@@ -655,11 +546,9 @@ begin
         LRoot.I['ricetta_id'] := LCosto.RicettaID;
         LRoot.I['versione'] := LCosto.Versione;
         LRoot.F['costo_totale'] := LCosto.CostoTotale;
-        // False se la ricetta contiene almeno un componente semilavorato:
-        // costo_totale in quel caso somma SOLO le materie prime (vedi
-        // TCostoRicetta.CostoCompleto in uServiziRicette.pas) - il modello
-        // DEVE avvisare l'utente che il costo mostrato e' parziale, non
-        // presentarlo come il costo reale della ricetta.
+        // False se c'e' un semilavorato: costo_totale somma solo le materie prime
+        // (TCostoRicetta.CostoCompleto) e il modello deve avvisare che il costo e'
+        // parziale.
         LRoot.B['costo_completo'] := LCosto.CostoCompleto;
 
         LArray := LRoot.A['componenti'];
@@ -676,23 +565,13 @@ begin
           LObj.S['unita_misura_dose'] := LComponente.UnitaMisuraDose;
           LObj.F['costo_unitario'] := LComponente.CostoUnitario;
           LObj.F['costo_totale'] := LComponente.CostoTotale;
-          // Vedi il commento su TCostoComponenteRicetta.CostoDisponibile:
-          // False solo per i semilavorati (costo_unitario/costo_totale
-          // sono 0 per costruzione in quel caso, non "gratis").
+          // False solo per i semilavorati: costo 0 per costruzione, non "gratis".
           LObj.B['costo_disponibile'] := LComponente.CostoDisponibile;
 
-          // Allergeni DICHIARATI di QUESTO componente, stessa forma
-          // {"codice","denominazione"} usata per "allergeni" nei candidati
-          // di cerca_componenti_ricetta: il modello puo' prendere il
-          // "codice" da qui e passarlo tale e quale come
-          // escludi_allergene_codice, invece di indovinare quale
-          // componente porti l'allergene da togliere (vedi il commento in
-          // testa alla unit sul perche' questo campo e' stato aggiunto -
-          // prima mancava e il modello scopriva l'errore di bersaglio solo
-          // DOPO aver simulato una sostituzione a vuoto).
-          // GetAllergeniComponente e' la stessa funzione gia' usata da
-          // CercaComponenti per i candidati (uServiziRicette.pas): nessuna
-          // nuova query, solo lo stesso dato esposto anche qui.
+          // Allergeni dichiarati di questo componente, nella forma dei candidati di
+          // cerca_componenti_ricetta: il modello passa il "codice" come
+          // escludi_allergene_codice invece di indovinare quale componente lo porti. Stessa
+          // funzione di CercaComponenti (GetAllergeniComponente), nessuna nuova query.
           LAllergeniComponente := TServizioRicette.GetAllergeniComponente(
             LComponente.IsComponenteMateriaPrima, LComponente.ComponenteID);
           try
@@ -702,25 +581,10 @@ begin
           end;
         end;
 
-        // Apertura vista DETERMINISTICA, non affidata al modello. Prima
-        // questo tool si limitava a ISTRUIRE il modello ("chiama SEMPRE
-        // apri_vista dopo aver ricevuto questo risultato") - in pratica,
-        // con Qwen 9B locale, un LLM piccolo che deve incatenare una
-        // SECONDA tool_use nello stesso turno subito dopo la prima e'
-        // inaffidabile: a volte lo fa, a volte si ferma al testo. Per
-        // un'azione che deve avvenire OGNI volta (mostrare la ricetta di
-        // partenza appena letta) e' piu' robusto incorporarla nel
-        // risultato di QUESTO tool - che il modello chiama comunque per
-        // primo, sempre, per costruzione (vedi il commento in testa alla
-        // unit) - invece di sperare in una sua seconda iniziativa.
-        //
-        // Stessa forma {"vista", "parametri"} gia' prodotta da apri_vista
-        // (TNavigazioneToolProvider), qui pero' sotto la chiave
-        // "apertura_vista" per non confondersi con "esito" (che qui vale
-        // "ok" per il risultato del tool, non per l'apertura): il
-        // frontend riconosce ENTRAMBE le forme con la stessa funzione
-        // (components/chat.js, aggiungiAperturaVista), sia che arrivino
-        // da una vera chiamata ad apri_vista sia incorporate qui.
+        // Apertura vista deterministica, non affidata al modello (vedi nota in testa).
+        // Stessa forma {"vista","parametri"} di apri_vista, ma sotto "apertura_vista" per
+        // non confondersi con "esito"; il frontend riconosce entrambe con la stessa
+        // funzione (chat.js, aggiungiAperturaVista).
         LObj := LRoot.O['apertura_vista'];
         LObj.S['vista'] := 'ricetta_prodotto_finito';
         LObj.O['parametri'].I['prodotto_finito_id'] := LCosto.ProdottoFinitoID;
@@ -737,10 +601,9 @@ begin
   else if SameText(AToolName, 'cerca_componenti_ricetta') then
   begin
     LTipoComponente := Trim(AArguments.S['tipo_componente']);
-    // CONTROLLO DI DIFESA (tappa 13): prima un valore sconosciuto (es.
-    // "ingrediente") veniva trattato in silenzio come "nessun filtro" e il
-    // modello credeva di aver filtrato. Ora e' un errore che dice i valori
-    // ammessi. Vuoto/assente resta "entrambi i tipi".
+    // Un valore sconosciuto (es. "ingrediente") prima era trattato come "nessun filtro" e
+    // il modello credeva di aver filtrato. Ora e' un errore che elenca i valori ammessi.
+    // Vuoto = entrambi i tipi.
     if (LTipoComponente <> '') and not SameText(LTipoComponente, 'materia_prima') and
        not SameText(LTipoComponente, 'semilavorato') then
       Exit(TMCPToolResult.Error(Format(
@@ -773,9 +636,7 @@ begin
           LObj.S['codice'] := LCandidato.Codice;
           LObj.S['denominazione'] := LCandidato.Denominazione;
           LObj.A['allergeni'] := AllergeniToJSON(LCandidato.Allergeni);
-          // Vedi il commento su TCandidatoComponente.GiacenzaDisponibile:
-          // informativo, non un filtro - un candidato con giacenza 0
-          // resta comunque nell'elenco.
+          // Informativo, non un filtro: un candidato con giacenza 0 resta nell'elenco.
           LObj.F['giacenza_disponibile'] := LCandidato.GiacenzaDisponibile;
         end;
 
@@ -808,12 +669,9 @@ begin
         LRoot.F['costo_ricetta_attuale'] := LSimulazione.CostoRicettaAttuale;
         LRoot.F['costo_ricetta_simulata'] := LSimulazione.CostoRicettaSimulata;
         LRoot.F['delta_costo'] := LSimulazione.DeltaCosto;
-        // False se la ricetta attuale o quella simulata include un
-        // semilavorato: i tre valori di costo qui sopra sono calcolati
-        // sulle sole materie prime (vedi TSimulazioneAdattamento.
-        // CostoCompleto) - il modello NON deve presentare delta_costo come
-        // il vero impatto economico dell'adattamento in quel caso, deve
-        // dirlo esplicitamente al cliente.
+        // False se la ricetta attuale o quella simulata ha un semilavorato: i costi sono
+        // sulle sole materie prime (TSimulazioneAdattamento.CostoCompleto) e delta_costo
+        // non e' il vero impatto economico; il modello deve dirlo.
         LRoot.B['costo_completo'] := LSimulazione.CostoCompleto;
         LRoot.A['allergeni_attuali'] := AllergeniToJSON(LSimulazione.AllergeniAttuali);
         LRoot.A['allergeni_simulati'] := AllergeniToJSON(LSimulazione.AllergeniSimulati);
@@ -834,9 +692,8 @@ begin
     if not PreparaChiamataProdotto(LProdottoID, LSostituzioni, LAggiunte, LRisultatoPreparazione) then
       Exit(LRisultatoPreparazione);
 
-    // CONTROLLO DI DIFESA (tappa 13): la libreria MCP verifica solo che la
-    // chiave "creato_da" ci sia, non che abbia un valore. Una scrittura
-    // senza autore non e' tracciabile, quindi non parte.
+    // La libreria MCP controlla che "creato_da" ci sia, non che abbia un valore. Senza
+    // autore la scrittura non e' tracciabile e non parte.
     if Trim(AArguments.S['creato_da']) = '' then
       Exit(TMCPToolResult.Error(
         'Parametro "creato_da" vuoto: serve il nome di chi conferma l''operazione (tracciabilita'').'));
@@ -847,12 +704,8 @@ begin
         AArguments.S['creato_da'], AArguments.S['note']);
     except
       on E: Exception do
-        // Errore di dominio (es. "nessuna variante compatibile e mancano
-        // codice/denominazione", o un componente indicato non presente
-        // nella ricetta): .Error, non un'eccezione di trasporto - il
-        // modello vede il messaggio e puo' correggere la chiamata (es.
-        // proponendo un codice) al turno successivo, senza che l'utente
-        // debba ripetere tutto da capo.
+        // Errore di dominio: .Error, non eccezione di trasporto, cosi' il modello puo'
+        // correggere la chiamata al turno successivo.
         Exit(TMCPToolResult.Error(E.Message));
     end;
 
@@ -874,15 +727,12 @@ begin
           LRoot.I['ricetta_id'] := LEsito.RicettaID;
           LRoot.I['versione'] := LEsito.Versione;
           LRoot.F['costo_ricetta'] := LEsito.CostoRicetta;
-          // Vedi il commento gemello in simula_adattamento_ricetta.
           LRoot.B['costo_ricetta_completo'] := LEsito.CostoRicettaCompleto;
         end;
 
-        // Apertura vista DETERMINISTICA sul prodotto RISULTANTE (la variante
-        // appena creata o quella riusata), con la sua ricetta corrente: stesso
-        // canale "apertura_vista" di get_ricetta_prodotto_finito, vedi il
-        // commento li' sopra. Senza questo la chat restava sulla ricetta di
-        // PARTENZA (aperta dalla lettura iniziale) anche dopo la scrittura.
+        // Apertura vista deterministica sul prodotto risultante (variante creata o
+        // riusata), stesso canale di get_ricetta_prodotto_finito. Senza, la chat restava
+        // sulla ricetta di partenza.
         LRoot.O['apertura_vista'].S['vista'] := 'ricetta_prodotto_finito';
         LRoot.O['apertura_vista'].O['parametri'].I['prodotto_finito_id'] := LEsito.ProdottoFinitoID;
 
@@ -896,23 +746,14 @@ begin
   end
 
   else
-    // Non dovrebbe succedere (TMCPServer.RegisterDynamicProvider dispatcha
-    // solo i nomi restituiti da GetDynamicToolDefs), ma un fallback
-    // esplicito e' piu' sicuro di un case senza else (vedi lo stesso
-    // pattern in uFilesToolsProvider.pas).
+    // Non dovrebbe succedere (si dispatchano solo i nomi di GetDynamicToolDefs), ma meglio
+    // un fallback esplicito.
     Result := TMCPToolResult.Error(Format(
       '"%s" non e'' un tool gestito da questo provider.', [AToolName]));
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTI DEI TOOL DI QUESTO PROVIDER (tappa 2 del porting del pianificatore,
-// vedi agente_ai/tool/uContrattiTool.pas). Portati da mcp_delphi.py del prototipo:
-// DEFINIZIONI (output_schema, effetto, conferma), INTEGRAZIONI_INPUT (vincoli
-// sugli input) e ALMENO_UNO. Gli schemi di output descrivono le risposte
-// costruite piu' sopra in questa unit: se cambia una risposta, va cambiato
-// anche il suo schema qui sotto. Il test scripts/prototipo_pianificatore/tests/
-// test_contratti_delphi.py li confronta con quelli del prototipo.
-// ---------------------------------------------------------------------------
+// Contratti (vedi uContrattiTool.pas). Gli schemi di output descrivono le risposte
+// costruite sopra: se cambia una risposta, va cambiato anche lo schema.
 
 const
   SCHEMA_OUTPUT_GET_RICETTA_PRODOTTO_FINITO =

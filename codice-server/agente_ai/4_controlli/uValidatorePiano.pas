@@ -1,48 +1,23 @@
 unit uValidatorePiano;
 
-(* ============================================================================
-  NORMALIZZAZIONE, DEDUPLICA E VALIDAZIONE DEL PIANO - tappa 6 del porting.
-  Porting di scripts/prototipo_pianificatore/pianificatore/argomenti.py e
-  validator.py (specifica: CONTRATTI.md, paragrafo 7).
-
-  Tre passaggi, in quest'ordine, fra il completamento del piano e la sua
-  esecuzione. Nessuno chiama il modello ne' un tool.
-
-  1. NORMALIZZAZIONE (NormalizzaPiano): corregge solo cio' che ha un'unica
-     lettura possibile.
-       - parametro facoltativo con valore null o stringa vuota -> tolto (per
-         i tool un facoltativo assente significa "nessun filtro");
-       - stringhe -> senza spazi in testa e in coda, a qualunque profondita'
-         (i riferimenti "$N..." restano come sono);
-       - intero scritto dove il parametro e' una stringa (es.
-         "prodotto_finito_id": 10) -> "10": i parametri id dei tool sono
-         stringhe;
-       - dipendenze ricalcolate: restano quelle dichiarate che puntano a un
-         passo precedente, si aggiungono quelle implicite nei riferimenti
-         degli argomenti. Il modello dichiara, il codice verifica e completa.
-     Niente altre conversioni: "12" non diventa 12. Cio' che richiede
-     un'interpretazione resta un errore, visibile nel log.
-
-  2. DEDUPLICA (DeduplicaPassi): due passi con lo stesso tool e gli stessi
-     argomenti sono la stessa operazione. Si tiene il primo, i passi vengono
-     rinumerati 1..n e i riferimenti verso il passo tolto puntano al gemello.
-
-  3. VALIDAZIONE (ValidaPiano): controlli sul piano INTERO prima di eseguire
-     qualunque passo. Raccoglie tutti gli errori. Se ce n'e' anche uno solo,
-     non si esegue niente.
-       ID_NON_CONSECUTIVI     i passi non sono numerati 1..n
-       DIPENDENZA_NON_VALIDA  dipendenza verso un passo non precedente
-       PASSO_INCOMPLETO       passo rimasto senza tool
-       TOOL_SCONOSCIUTO       tool non presente nel catalogo
-       TOOL_NON_AMMESSO       tool scelto dal Completer fuori dai candidati
-       ARGOMENTO_MANCANTE     parametro obbligatorio assente
-       ARGOMENTO_SCONOSCIUTO  parametro non dichiarato dal tool
-       TIPO_ERRATO            valore non conforme allo schema del parametro
-       RIF_...                riferimento non valido (vedi uRiferimentiPiano)
-       RIF_PASSO_NON_VALIDO   riferimento a un passo non precedente
-       RIF_TIPO_INCOMPATIBILE il tipo del valore riferito non va bene per il
-                              parametro
-  ============================================================================ *)
+// Normalizzazione, deduplica e validazione del piano, in quest'ordine, fra il completamento
+// e l'esecuzione. Nessuna chiama il modello o un tool.
+// 1. NORMALIZZAZIONE (NormalizzaPiano): corregge solo cio' che ha un'unica lettura. Tolti i
+// parametri facoltativi null o stringa vuota (assente = nessun filtro); stringhe senza
+// spazi iniziali e finali a ogni profondita' (i riferimenti "$N..." restano); intero
+// scritto dove il parametro e' una stringa -> stringa (es. 10 -> "10": gli id dei tool sono
+// stringhe); dipendenze ricalcolate (restano quelle dichiarate verso un passo precedente,
+// piu' quelle implicite nei riferimenti). Niente altre conversioni: "12" non diventa 12.
+// 2. DEDUPLICA (DeduplicaPassi): due passi con lo stesso tool e gli stessi argomenti sono
+// la stessa operazione; si tiene il primo, i passi sono rinumerati 1..n e i riferimenti al
+// passo tolto puntano al gemello.
+// 3. VALIDAZIONE (ValidaPiano): controlli sul piano intero prima di eseguire qualunque
+// passo; raccoglie tutti gli errori e, se ce n'e' uno, non si esegue niente. Codici:
+// ID_NON_CONSECUTIVI, DIPENDENZA_NON_VALIDA (verso un passo non precedente),
+// PASSO_INCOMPLETO (senza tool), TOOL_SCONOSCIUTO, TOOL_NON_AMMESSO (scelto dal Completer
+// fuori dai candidati), ARGOMENTO_MANCANTE, ARGOMENTO_SCONOSCIUTO, TIPO_ERRATO, RIF_...
+// (riferimento non valido, vedi uRiferimentiPiano), RIF_PASSO_NON_VALIDO,
+// RIF_TIPO_INCOMPATIBILE.
 
 interface
 
@@ -70,19 +45,15 @@ type
     // Normalizza argomenti e dipendenze di ogni passo. Restituisce le note.
     class function NormalizzaPiano(APiano: TPiano): TArray<string>;
 
-    // Toglie i passi duplicati e rinumera. AMappa (creato dal chiamante)
-    // riceve vecchio id -> nuovo id; un passo tolto mappa sul nuovo id del
-    // gemello. ATolti: vecchi id dei passi tolti. Restituisce le note
-    // (vuote se non c'erano duplicati: in quel caso il piano non cambia).
+    // Toglie i passi duplicati e rinumera. AMappa (del chiamante) riceve vecchio id ->
+    // nuovo id (un passo tolto mappa sul gemello); ATolti: id dei passi tolti. Restituisce
+    // le note (vuote se non c'erano duplicati: il piano non cambia).
     class function DeduplicaPassi(APiano: TPiano; AMappa: TDictionary<Integer, Integer>;
       out ATolti: TArray<Integer>): TArray<string>;
 
-    // ARetrieval puo' essere nil; ACompletati sono gli id dei passi scritti
-    // dal Completer (solo per quelli si controlla che il tool sia fra i
-    // candidati).
-    // ATestoNoto (tappa 13): la domanda dell'utente piu' lo storico della
-    // conversazione. Serve al controllo dei "valori ancorati"; vuoto = quel
-    // controllo non si fa.
+    // ARetrieval puo' essere nil; ACompletati: id dei passi scritti dal Completer (solo per
+    // quelli si controlla che il tool sia fra i candidati). ATestoNoto: domanda dell'utente
+    // piu' storico, per il controllo dei valori ancorati; vuoto = controllo saltato.
     class function ValidaPiano(APiano: TPiano; ARetrieval: TRisultatoRetrieval;
       const ACompletati: TArray<Integer>; const ATestoNoto: string = ''): TArray<TErroreValidazione>;
   end;
@@ -209,8 +180,6 @@ begin
   else
     Result := JSONComePython(AValore);
 end;
-
-{ TValidatorePiano }
 
 class function TValidatorePiano.NormalizzaArgomenti(AArgomenti, AInputSchema: TJSONObject;
   ANote: TList<string>): TJSONObject;
@@ -617,9 +586,7 @@ begin
     Aggiungi(AContesto, 'TIPO_ERRATO', LMessaggio);
 end;
 
-// ---------------------------------------------------------------------------
-// CONTROLLI DI DIFESA (tappa 13)
-// ---------------------------------------------------------------------------
+// Controlli di difesa
 
 // Un valore "vuoto" non conta come indicato: assente, null, "" oppure [].
 function ValoreIndicato(AValore: TJSONValue): Boolean;
@@ -633,13 +600,11 @@ begin
   Result := True;
 end;
 
-// "ALMENO UNO FRA". Alcuni tool hanno parametri tutti facoltativi, ma senza
-// almeno uno di un certo gruppo non possono lavorare (es. la ricetta si cerca
-// per nome OPPURE per id del prodotto). I gruppi sono dichiarati nel
-// contratto del tool e arrivano qui nella chiave interna "x_almeno_uno" dello
-// schema di input. Il tool farebbe comunque lo stesso controllo, ma cosi'
-// l'errore esce PRIMA di eseguire (e prima di chiedere una conferma su una
-// scrittura incompleta).
+// ALMENO UNO FRA: alcuni tool hanno tutti i parametri facoltativi ma non possono lavorare
+// senza almeno uno di un gruppo (es. la ricetta si cerca per nome O per id prodotto). I
+// gruppi sono nel contratto del tool, nella chiave interna "x_almeno_uno" dello schema di
+// input. Il controllo qui fa uscire l'errore prima di eseguire e prima di chiedere conferma
+// per una scrittura incompleta.
 procedure ControllaAlmenoUno(ASchema, AArgomenti: TJSONObject; const ATool: string;
   const AContesto: TContestoPasso);
 var
@@ -670,19 +635,13 @@ begin
   end;
 end;
 
-// "VALORI ANCORATI". Un id o un codice scritto dal modello deve venire da
-// qualche parte: dalla domanda dell'utente o dallo storico della conversazione
-// (ATestoNoto). Se non compare da nessuna parte, il modello lo ha inventato o
-// copiato male, e il piano non va eseguito: e' l'errore piu' pericoloso,
-// perche' porta a leggere o SCRIVERE sul lotto o sul prodotto sbagliato.
-//
-// Si controllano SOLO:
-//   - gli id: chiavi "id", "..._id", "...Id" con valore fatto di sole cifre;
-//   - i codici che scrive sempre l'utente (elenco CODICI_ANCORATI).
-// NON si controllano i testi liberi (motivo, note, nomi: il modello puo'
-// riformularli) ne' i codici che il modello puo' ricavare da solo (es. il
-// codice allergene LAT da "lattosio"). I riferimenti "$N.campo" non sono
-// letterali: il loro valore arriva dai risultati veri, quindi si saltano.
+// VALORI ANCORATI: un id o un codice scritto dal modello deve comparire nella domanda
+// dell'utente o nello storico (ATestoNoto); altrimenti e' inventato o copiato male e il
+// piano non si esegue (rischio: leggere o scrivere sul lotto o prodotto sbagliato).
+// Si controllano solo gli id (chiavi "id", "..._id", "...Id" con sole cifre) e i codici che
+// scrive sempre l'utente (CODICI_ANCORATI). Non i testi liberi (motivo, note, nomi) ne' i
+// codici che il modello ricava da solo (es. LAT da "lattosio"). I riferimenti "$N.campo" si
+// saltano: il valore arriva dai risultati veri.
 const
   CODICI_ANCORATI: array[0..2] of string = (
     'codici_lotto_materia_prima', 'codice_non_conformita_base', 'codice_nuovo_prodotto');
@@ -824,7 +783,7 @@ begin
                 LNome, LContesto);
           end;
 
-        // Tappa 13: "almeno uno fra" e "valori ancorati" (vedi sopra).
+        // Controlli "almeno uno fra" e "valori ancorati" (vedi sopra).
         ControllaAlmenoUno(LSchema, LPasso.Argomenti, LPasso.Tool, LContesto);
         if (ATestoNoto <> '') and (LPasso.Argomenti <> nil) then
           ControllaAncorati(LPasso.Argomenti, '', ATestoNoto, LContesto);

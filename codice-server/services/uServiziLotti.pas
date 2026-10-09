@@ -9,49 +9,25 @@ uses
   DbU;
 
 type
-  // Query di lettura "arricchite" sui tre lotti (materie prime,
-  // semilavorati, prodotti finiti), pensate per la vista Lotti del
-  // frontend web.
-  //
-  // PERCHE' UN SERVICE E NON I MODEL TLottoMateriaPrima/TLottoSemilavorato/
-  // TLottoProdottoFinito (vedi models/uModelLotto*.pas)
-  // I model restano fedeli alla riga della loro tabella: TLottoMateriaPrima.
-  // ToJSONObject espone materia_prima_id, non la denominazione, perche' e'
-  // la rappresentazione corretta per chi scrive (TServizioGiacenza, che
-  // lavora per id) e per un futuro CRUD. La vista Lotti, pero', deve
-  // disegnare una tabella leggibile: un id nudo non basta, serve gia'
-  // risolto codice+denominazione della materia prima/semilavorato/prodotto
-  // finito collegato. Stessa scelta gia' fatta per gli ordini di vendita
-  // (vedi TServizioOrdiniVendita.Elenco, SQL_ELENCO_BASE: la riga d'ordine
-  // porta gia' "prodotto" via JOIN, non solo prodotto_id) — qui si applica
-  // lo stesso principio ai tre tipi di lotto.
-  //
-  // TRE METODI ELENCO SEPARATI, NON UNO SOLO
-  // Scelta presa con Helena: un /api/lotti unico che unisce i tre tipi
-  // avrebbe richiesto una UNION su tabelle con colonne diverse (i lotti di
-  // semilavorato non hanno data_scadenza, quelli di materia prima non hanno
-  // ricetta_id/stabilimento_id...) e un'unica forma JSON annacquata per
-  // forza. Tre endpoint distinti (vedi i tre controller
-  // uControllerLottiMateriePrime/Semilavorati/ProdottiFiniti) restano
-  // speculari al pattern gia' in uso per le anagrafiche (TControllerMateriePrime/
-  // Semilavorati/ProdottiFiniti) ed espongono ciascuno la forma reale della
-  // propria tabella: la vista frontend, se vuole una tabella unica, unisce i
-  // tre risultati lato client (vedi assets/js/views/view-lotti.js).
-  //
-  // SOLA LETTURA
-  // Nessuno dei tre scenari del tirocinio crea o modifica un lotto da un
-  // endpoint REST diretto: un lotto nasce da un DDT di entrata o da una
-  // produzione (entrambi fuori dal perimetro, vedi le voci disabilitate in
-  // view-da-costruire.js) oppure viene decrementato in giacenza da un
-  // consumo di produzione (TServizioGiacenza, chiamato dai tool MCP dello
-  // scenario ricette). La scrittura vera resta li': questo service e i
-  // controller che lo usano sono solo una vetrina di lettura.
+  // Letture "arricchite" sui tre lotti (materie prime, semilavorati, prodotti finiti) per
+  // la vista Lotti.
+  // Un service e non i model: i model restano fedeli alla riga della tabella
+  // (TLottoMateriaPrima.ToJSONObject espone materia_prima_id, giusto per TServizioGiacenza
+  // e un futuro CRUD), ma la vista deve mostrare codice e denominazione gia' risolti.
+  // Stessa scelta degli ordini di vendita (TServizioOrdiniVendita.Elenco, SQL_ELENCO_BASE).
+  // Tre elenchi separati e non un /api/lotti unico: servirebbe una UNION su tabelle con
+  // colonne diverse (i lotti di semilavorato non hanno data_scadenza, quelli di materia
+  // prima non hanno ricetta_id/stabilimento_id) e un JSON annacquato. Tre endpoint
+  // (uControllerLottiMateriePrime/Semilavorati/ProdottiFiniti) come le anagrafiche,
+  // ciascuno con la forma della propria tabella; la vista che vuole una tabella unica
+  // unisce i risultati lato client (assets/js/views/view-lotti.js).
+  // Sola lettura: nessuno scenario crea o modifica un lotto da REST. Un lotto nasce da un
+  // DDT di entrata o da una produzione (fuori perimetro) o si decrementa con un consumo
+  // (TServizioGiacenza, dai tool dello scenario ricette).
   TServizioLotti = class
   public
-    // AMateriaPrimaID = 0 (default): nessun filtro, tutti i lotti.
-    // Altrimenti solo i lotti di QUELLA materia prima (stesso ruolo di
-    // TLottoMateriaPrima.GetByMateriaPrima, qui con denominazione gia'
-    // risolta).
+    // AMateriaPrimaID = 0: tutti i lotti; altrimenti solo quelli di quella materia prima
+    // (come GetByMateriaPrima, con la denominazione risolta).
     class function ElencoMateriePrime(AMateriaPrimaID: Integer = 0): TJSONArray;
     class function DettaglioMateriaPrima(AID: Integer): TJSONObject;
 
@@ -65,18 +41,11 @@ type
 implementation
 
 const
-  // JOIN su anagrafiche_materie_prime: mp.codice/mp.denominazione danno
-  // alla riga un nome leggibile, esattamente come materia_prima_id da
-  // solo non potrebbe. ORDER BY data_scadenza = ordinamento FEFO (First
-  // Expired, First Out), lo stesso gia' scelto in TLottoMateriaPrima.GetAll.
-  // LEFT JOIN (non JOIN) su ddt_entrata_righe: TLottoMateriaPrima non ha
-  // una colonna unita_misura propria, la eredita dalla riga DDT di
-  // origine (vedi il commento in uModelLottoMateriaPrima.pas) - senza
-  // questo secondo join la vista non avrebbe modo di sapere se una
-  // quantita' e' in kg, litri o pezzi. LEFT e non JOIN semplice per
-  // sicurezza: un domani un lotto senza riga DDT collegata (dato
-  // storico, importazione) non deve sparire dall'elenco, deve solo
-  // comparire con unita_misura vuota.
+  // JOIN su anagrafiche_materie_prime per codice e denominazione. ORDER BY data_scadenza =
+  // FEFO, come TLottoMateriaPrima.GetAll. LEFT JOIN su ddt_entrata_righe: il lotto non ha
+  // unita_misura propria (uModelLottoMateriaPrima), senza il join la vista non saprebbe se
+  // la quantita' e' in kg, litri o pezzi; LEFT perche' un lotto senza riga DDT (dato
+  // storico) non deve sparire.
   SQL_LOTTI_MATERIE_PRIME =
     'SELECT l.id, l.materia_prima_id, mp.codice AS entita_codice, ' +
     'mp.denominazione AS entita_denominazione, l.codice_lotto, ' +
@@ -86,9 +55,8 @@ const
     'JOIN anagrafiche_materie_prime mp ON mp.id = l.materia_prima_id ' +
     'LEFT JOIN ddt_entrata_righe der ON der.id = l.ddt_entrata_riga_id ';
 
-  // I lotti di semilavorato non hanno data_scadenza (il DDL non la
-  // prevede, vedi il commento in uModelLottoSemilavorato.pas): si ordina
-  // per data_produzione, piu' recente per ultima, come nel model.
+  // Niente data_scadenza (non prevista per i semilavorati): ordine per data_produzione,
+  // piu' recente per ultima.
   SQL_LOTTI_SEMILAVORATI =
     'SELECT l.id, l.semilavorato_id, s.codice AS entita_codice, ' +
     's.denominazione AS entita_denominazione, l.codice_lotto, ' +
@@ -107,18 +75,9 @@ const
     'FROM lotti_prodotti_finiti l ' +
     'JOIN anagrafiche_prodotti_finiti pf ON pf.id = l.prodotto_finito_id ';
 
-{ TServizioLotti }
-
-// ---------------------------------------------------------------------
-// Mapping riga -> TJSONObject, un metodo per tipo: usato sia da Elenco
-// (una volta per riga) sia da Dettaglio (una volta sola), cosi' le due
-// risposte non possono divergere nella forma. "entita_codice"/
-// "entita_denominazione" (non "materia_prima_codice" ecc.): stesso nome
-// di campo nei tre JSON, cosi' la vista frontend che unisce i tre elenchi
-// in un'unica tabella (view-lotti.js) legge sempre la stessa chiave a
-// prescindere dal tipo di lotto, invece di doverla scegliere caso per
-// caso.
-// ---------------------------------------------------------------------
+// Mapping riga -> TJSONObject, uno per tipo, usato da Elenco e Dettaglio cosi' le due
+// risposte non divergono. "entita_codice"/"entita_denominazione" hanno lo stesso nome nei
+// tre JSON, cosi' view-lotti.js, che unisce i tre elenchi, legge sempre la stessa chiave.
 
 function RigaMateriaPrima(AQuery: TAutoQuery): TJSONObject;
 begin
@@ -133,8 +92,7 @@ begin
     Result.AddPair('data_scadenza', DateToISO8601(FieldByName('data_scadenza').AsDateTime));
     Result.AddPair('quantita', TJSONNumber.Create(FieldByName('quantita').AsCurrency));
     Result.AddPair('quantita_disponibile', TJSONNumber.Create(FieldByName('quantita_disponibile').AsCurrency));
-    // AsString su un campo NULL (nessuna riga DDT collegata, vedi il
-    // commento sul LEFT JOIN qui sopra) restituisce '', mai un'eccezione.
+    // AsString su un NULL (nessuna riga DDT, vedi LEFT JOIN) da' '', mai un'eccezione.
     Result.AddPair('unita_misura', FieldByName('unita_misura').AsString);
     Result.AddPair('ddt_entrata_riga_id', TJSONNumber.Create(FieldByName('ddt_entrata_riga_id').AsInteger));
     Result.AddPair('creato_il', DateToISO8601(FieldByName('creato_il').AsDateTime));

@@ -6,13 +6,11 @@ uses
   System.SysUtils,
   System.JSON;
 
-{ Ponte in processo verso il server MCP (TMCPServer.Instance).
-  Unico punto che usa l'API della libreria MCP e JsonDataObjects: il resto
-  del progetto lavora su System.JSON. Stessi tool e stesso dispatch di
-  /mcp, senza HTTP. Note estese: docs/uMCPBridge_note.md.
-  Attenzione: TJSONObject/TJsonObject delle due librerie sono lo stesso
-  nome per il compilatore, quindi i tipi JsonDataObjects vanno sempre
-  qualificati. }
+// Ponte in processo verso il server MCP (TMCPServer.Instance): stessi tool e stesso
+// dispatch di /mcp, senza HTTP. E' l'unico punto che usa l'API della libreria MCP e
+// JsonDataObjects; il resto del progetto usa System.JSON. Attenzione: TJSONObject delle due
+// librerie ha lo stesso nome per il compilatore, quindi i tipi JsonDataObjects vanno sempre
+// qualificati.
 
 type
   TMCPBridge = class
@@ -36,8 +34,6 @@ uses
   System.Generics.Collections,
   MVCFramework.MCP.Server,
   JsonDataObjects;
-
-{ TMCPBridge }
 
 // Istanza di TMCPEndpoint sul server MCP esistente, come la factory di /mcp.
 // Non apre nessun endpoint HTTP.
@@ -119,18 +115,14 @@ begin
   end;
 end;
 
-// Parametri che il modello ha scritto ma che il tool NON dichiara.
-// Perche' serve: la libreria MCP (DoToolsCall) legge solo i parametri
-// dichiarati e ignora in silenzio tutti gli altri. Se il modello scrive
-// "data_inizio" al posto di "ADataInizio", il filtro sparisce e il tool
-// risponde "ok" con i valori predefiniti: un dato vero, ma che non risponde
-// alla domanda, e senza alcun segnale. Con questo controllo la chiamata non
-// parte e il modello riceve un errore con i nomi giusti, che puo' correggere
-// al passo successivo.
-// Il confronto ignora maiuscole/minuscole, come fa la libreria (FindArgName).
-// Restituisce i nomi non dichiarati separati da virgola ('' se sono tutti
-// validi); AValidi riceve l'elenco dei parametri dichiarati dal tool.
-// Tool sconosciuto: '' - ci pensa la libreria con "Tool not found".
+// Parametri scritti dal modello che il tool NON dichiara. La libreria MCP (DoToolsCall)
+// ignora in silenzio i parametri non dichiarati: se il modello scrive "data_inizio" al
+// posto di "ADataInizio", il filtro sparisce e il tool risponde "ok" con i valori
+// predefiniti, senza alcun segnale. Con questo controllo la chiamata non parte e il modello
+// riceve un errore con i nomi giusti. Confronto senza distinzione di maiuscole (come
+// FindArgName). Restituisce i nomi non dichiarati separati da virgola ('' se validi);
+// AValidi riceve i parametri dichiarati. Tool sconosciuto: '' (ci pensa la libreria con
+// "Tool not found").
 function ParametriNonDichiarati(const ANomeTool: string;
   AArgomenti: System.JSON.TJSONObject; out AValidi: string): string;
 var

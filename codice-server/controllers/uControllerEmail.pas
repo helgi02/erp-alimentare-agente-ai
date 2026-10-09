@@ -11,40 +11,24 @@ uses
   uServiziModelliEmail;
 
 type
-  // Invio di email GIA' PRONTE (destinatario, oggetto, testo) su richiesta
-  // diretta del frontend.
-  //
-  // -- A cosa serve ---------------------------------------------------------
-  // Dopo anteprima_email_da_modello la chat mostra le bozze in un modulo in
-  // cui l'utente puo' correggere oggetto e testo di ogni email. Il testo
-  // corretto NON puo' ripassare dall'agente: invia_email_da_modello
-  // ricompone le email dal modello e le correzioni andrebbero perse (e far
-  // riscrivere il testo al modello di linguaggio e' proprio cio' che si e'
-  // voluto evitare). Il pulsante "Invia" del modulo chiama quindi questo
-  // endpoint, senza passare dal modello: stesso principio dei pulsanti di
-  // conferma, dove il clic dell'utente sostituisce una chiamata all'LLM.
-  //
-  // -- Chi conferma ---------------------------------------------------------
-  // Il clic su "Invia" E' la conferma: l'utente ha il testo definitivo sotto
-  // gli occhi. Per questo qui non c'e' il passaggio di conferma che il
-  // pianificatore impone ai tool di scrittura.
-  //
-  // -- Limiti ---------------------------------------------------------------
-  // Come il resto delle API del gestionale, l'endpoint non richiede
-  // autenticazione (vedi il documento sugli sviluppi futuri di sicurezza):
-  // chi raggiunge il server puo' far partire email dalla casella aziendale.
-  // L'agente non viene informato dell'invio: lo storico della conversazione
-  // contiene l'anteprima, non l'esito.
-  //
-  // Controller sottile: validazione, un ciclo di invii con TEmailServer e
-  // l'esito riga per riga (stessa forma di invia_email_da_modello).
+  // Invio di email gia' pronte (destinatario, oggetto, testo) su richiesta diretta del
+  // frontend.
+  // Dopo anteprima_email_da_modello la chat mostra le bozze modificabili. Il testo corretto
+  // non puo' ripassare dall'agente: invia_email_da_modello ricomporrebbe le email dal
+  // modello perdendo le correzioni (e farle riscrivere al modello e' cio' che si voleva
+  // evitare). Il pulsante "Invia" chiama quindi questo endpoint, come i pulsanti di
+  // conferma. Il clic e' la conferma: l'utente ha il testo definitivo sotto gli occhi.
+  // Limiti: come il resto delle API, nessuna autenticazione (vedi sviluppi futuri di
+  // sicurezza): chi raggiunge il server puo' far partire email dalla casella aziendale.
+  // L'agente non sa dell'invio: lo storico contiene l'anteprima, non l'esito.
+  // Controller sottile: validazione, ciclo di invii con TEmailServer, esito riga per riga
+  // (come invia_email_da_modello).
   [MVCPath('/api/email')]
   TControllerEmail = class(TMVCController)
   public
-    // Corpo:    { "messaggi": [ { "email", "oggetto", "corpo" }, ... ] }
-    // Risposta: { "inviate", "non_inviate",
-    //             "dettaglio": [ { "email", "oggetto", "inviata", "errore" } ] }
-    // 400 se un messaggio non e' valido (non parte NESSUNA email).
+    // Corpo: { "messaggi": [ { "email", "oggetto", "corpo" } ] }. Risposta: { "inviate",
+    // "non_inviate", "dettaglio": [ { "email", "oggetto", "inviata", "errore" } ] }. 400 se
+    // un messaggio non e' valido (non parte nessuna email).
     [MVCPath('/invio')]
     [MVCHTTPMethod([httpPOST])]
     procedure Invia(ctx: TWebContext);
@@ -53,10 +37,9 @@ type
 implementation
 
 const
-  // Stesso tetto di invia_email_da_modello (uEmailToolProvider.pas).
+  // Stesso tetto di invia_email_da_modello.
   MAX_MESSAGGI = 100;
 
-// Valore testuale di un campo, '' se assente o non stringa.
 function Testo(AOggetto: TJSONObject; const ANome: string): string;
 var
   LValore: TJSONValue;
@@ -68,14 +51,12 @@ begin
     Result := '';
 end;
 
-// Oggetto su una riga sola: e' un'intestazione del messaggio.
+// Oggetto su una riga: e' un'intestazione.
 function OggettoSuUnaRiga(const AOggetto: string): string;
 begin
   Result := StringReplace(AOggetto, #13, ' ', [rfReplaceAll]);
   Result := Trim(StringReplace(Result, #10, ' ', [rfReplaceAll]));
 end;
-
-{ TControllerEmail }
 
 procedure TControllerEmail.Invia(ctx: TWebContext);
 var
@@ -108,8 +89,8 @@ begin
       Exit;
     end;
 
-    // 1. Validazione di TUTTI i messaggi prima di inviarne uno: un modulo
-    //    compilato male non deve produrre un invio a meta'.
+    // Si validano tutti i messaggi prima di inviarne uno: un modulo compilato male non deve
+    // produrre un invio a meta'.
     for I := 0 to LMessaggi.Count - 1 do
     begin
       if not (LMessaggi.Items[I] is TJSONObject) then
@@ -143,9 +124,8 @@ begin
       Exit;
     end;
 
-    // 2. Invio, una email separata per destinatario. Un errore riguarda la
-    //    singola email: le altre si tentano comunque e la risposta dice,
-    //    riga per riga, che cosa e' partito.
+    // Una email separata per destinatario. Un errore riguarda la singola email: le altre si
+    // tentano e la risposta dice riga per riga cosa e' partito.
     LInviate := 0;
     LNonInviate := 0;
     LRisposta := TJSONObject.Create;
@@ -158,8 +138,8 @@ begin
         LEmail := Trim(Testo(LMessaggio, 'email'));
         LOggetto := OggettoSuUnaRiga(Testo(LMessaggio, 'oggetto'));
 
-        // Il testo arriva dalla textarea come testo semplice: TestoComeHtml
-        // protegge i caratteri speciali e trasforma gli a capo in <br>.
+        // Il testo e' semplice: TestoComeHtml protegge i caratteri speciali e trasforma gli
+        // a capo in <br>.
         LInviata := TEmailServer.InviaConAllegato(LEmail, LOggetto,
           TServizioModelliEmail.TestoComeHtml(Testo(LMessaggio, 'corpo')),
           Default(TEmailAllegato), LErrore);
@@ -182,8 +162,7 @@ begin
       raise;
     end;
 
-    // Render prende possesso di LRisposta e lo libera (vedi
-    // uControllerDashboard.pas): nessuna Free qui.
+    // Render libera LRisposta (vedi uControllerDashboard): niente Free.
     Render(LRisposta);
   finally
     LValore.Free;

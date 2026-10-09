@@ -11,14 +11,9 @@ uses
   DbU;
 
 type
-  // Filtri dell'elenco ordini di vendita. Tutti opzionali e liberamente
-  // combinabili: e' lo stesso principio di design dei tool MCP (un solo
-  // punto di accesso parametrico invece di un endpoint per ogni
-  // combinazione), applicato qui al livello REST.
-  //
-  // Le sentinelle di "filtro assente" sono 0 per gli ID e 0 (data nulla)
-  // per le date, coerentemente con il resto del progetto, dove 0 indica
-  // gia' NULL nei model (es. TNonConformita.LottoMateriaPrimaID).
+  // Filtri dell'elenco ordini di vendita, tutti opzionali e combinabili (lo stesso
+  // principio dei tool MCP, a livello REST). Sentinella "filtro assente": 0 per gli ID e
+  // per le date, come nei model (0 = NULL).
   TFiltriOrdiniVendita = record
     ClienteID: Integer;
     ProdottoID: Integer;
@@ -29,73 +24,51 @@ type
     PerPagina: Integer;
   end;
 
-  // Servizio di sola lettura a supporto della schermata Vendite del
-  // frontend web.
-  //
-  // PERCHE' NON SI RIUSA TServizioVendite (quello dei tool MCP)
-  // Quel servizio e' tarato su un interlocutore diverso, il modello
-  // linguistico, e ha comportamenti che in una schermata sarebbero
-  // sbagliati: risolve i nomi in ID gestendo l'ambiguita', taglia il
-  // dettaglio a 100 righe, applica un periodo di default implicito
-  // ("ultimo mese") e esclude sempre gli ordini annullati. La vista
-  // riceve invece ID gia' scelti da un elenco, deve paginare davvero,
-  // deve mostrare il periodo nei campi e deve poter filtrare anche gli
-  // annullati. Stessi dati e stesso dominio, interfacce diverse: sono
-  // due servizi distinti proprio perche' i vincoli sono diversi.
-  //
-  // NOTA SUI TOTALI (importante)
-  // I totali sono calcolati da una query PROPRIA, senza LIMIT, non
-  // accumulati mentre si leggono le righe della pagina. E' la
-  // differenza fra "fatturato del periodo richiesto" e "fatturato dei
-  // record che sto mostrando": la seconda e' un numero plausibile e
-  // sbagliato, cioe' il tipo di errore peggiore. Lo stesso difetto e'
-  // presente oggi in TServizioVendite.EseguiQuery, dove i totali
-  // vengono sommati dentro il ciclo su una query gia' limitata a 100
-  // righe, e va corretto li' allo stesso modo.
+  // Lettura per la schermata Vendite.
+  // Non riusa TServizioVendite (quello dei tool MCP) perche' ha comportamenti sbagliati per
+  // una schermata: risolve i nomi in ID gestendo l'ambiguita', taglia il dettaglio a 100
+  // righe, applica il periodo di default "ultimo mese" ed esclude sempre gli annullati. La
+  // vista riceve ID gia' scelti, pagina davvero, mostra il periodo e puo' filtrare anche
+  // gli annullati.
+  // I totali sono calcolati da una query propria, senza LIMIT, non sommati sulle righe
+  // della pagina: "fatturato del periodo" e non "dei record mostrati", che sarebbe un
+  // numero plausibile e sbagliato. Lo stesso difetto c'e' oggi in
+  // TServizioVendite.EseguiQuery (totali sommati su una query limitata a 100 righe) e va
+  // corretto li' allo stesso modo.
   TServizioOrdiniVendita = class
   private
-    // Costruisce la clausola WHERE dinamica in base ai filtri
-    // valorizzati, e riempie AParams con i valori nello stesso ordine in
-    // cui i placeholder compaiono nel testo: TDB.getQueryResult li lega
-    // per POSIZIONE, quindi l'ordine di inserimento e' vincolante.
-    // La stessa WHERE viene usata sia dalla query dei dati sia da quella
-    // dei totali: una sola definizione del filtro, nessun rischio che le
-    // due divergano.
+    // Costruisce la WHERE dinamica e riempie AParams nello stesso ordine dei placeholder:
+    // TDB.getQueryResult li lega per posizione. La stessa WHERE serve la query dei dati e
+    // quella dei totali, che non possono divergere.
     class function CostruisciWhere(const AFiltri: TFiltriOrdiniVendita;
       AParams: TList<Variant>): string;
 
     class function RigheOrdineToJSON(AOrdineID: Integer;
       out ATotale: Currency): TJSONArray;
   public
-    // Elenco paginato. Il chiamante e' responsabile della Free.
+    // Elenco paginato. Il chiamante libera l'oggetto.
     class function Elenco(const AFiltri: TFiltriOrdiniVendita): TJSONObject;
 
-    // Testata + righe di un singolo ordine. Restituisce nil se l'ordine
-    // non esiste, cosi' il controller puo' rispondere 404.
+    // Testata + righe di un ordine. nil se non esiste (il controller risponde 404).
     class function Dettaglio(AID: Integer): TJSONObject;
 
-    // Valori ammessi da chk_stato_ordine_vendita. Esposta perche' il
-    // controller possa rifiutare uno stato non valido con un 400 invece
-    // di lasciar arrivare al database un filtro senza senso.
+    // Valori di chk_stato_ordine_vendita, perche' il controller risponda 400 a uno stato
+    // non valido invece di mandare al DB un filtro senza senso.
     class function StatoValido(const AStato: string): Boolean;
   end;
 
 implementation
 
 const
-  // Limite di sicurezza sulla dimensione di pagina: senza, un
-  // per_pagina=100000 nella query string diventerebbe una lettura
-  // dell'intera tabella richiesta da chiunque.
+  // Limite alla dimensione di pagina: senza, per_pagina=100000 leggerebbe l'intera tabella.
   MAX_PER_PAGINA     = 200;
   PER_PAGINA_DEFAULT = 10;
 
   STATI_VALIDI: array[0..3] of string =
     ('confermato', 'spedito', 'consegnato', 'annullato');
 
-  // Testata dell'ordine piu' i due valori derivati dalle righe.
-  // numero_righe e totale sono subquery correlate e non colonne di
-  // ordini_vendita: il DDL non memorizza dati derivati, cosi' testata e
-  // righe non possono disallinearsi.
+  // Testata + due valori derivati dalle righe (numero_righe, totale), subquery correlate
+  // perche' il DDL non memorizza dati derivati.
   SQL_ELENCO_BASE =
     'SELECT ov.id, ov.numero_ordine, ov.data_ordine, ov.stato, ' +
     '       ov.cliente_id, c.ragione_sociale AS cliente, ' +
@@ -107,18 +80,15 @@ const
     'FROM ordini_vendita ov ' +
     'JOIN clienti c ON c.id = ov.cliente_id ';
 
-  // Totali sull'intero insieme filtrato.
-  // Il LEFT JOIN sulle righe serve a sommare gli importi; COUNT(DISTINCT
-  // ov.id) e' obbligatorio perche' il join moltiplica la testata per il
-  // numero di righe e un COUNT(*) conterebbe le righe, non gli ordini.
+  // Totali sull'intero insieme filtrato. Il LEFT JOIN sulle righe somma gli importi;
+  // COUNT(DISTINCT ov.id) e' necessario perche' il join moltiplica la testata per le righe
+  // e COUNT(*) conterebbe le righe.
   SQL_TOTALI_BASE =
     'SELECT COUNT(DISTINCT ov.id) AS totale_ordini, ' +
     '       COALESCE(SUM(ovr.quantita * ovr.prezzo_unitario), 0) AS totale_fatturato ' +
     'FROM ordini_vendita ov ' +
     'JOIN clienti c ON c.id = ov.cliente_id ' +
     'LEFT JOIN ordini_vendita_righe ovr ON ovr.ordine_vendita_id = ov.id ';
-
-{ TServizioOrdiniVendita }
 
 class function TServizioOrdiniVendita.StatoValido(const AStato: string): Boolean;
 var
@@ -143,13 +113,9 @@ begin
       AParams.Add(AFiltri.ClienteID);
     end;
 
-    // Filtro sul prodotto con EXISTS e non con un JOIN sulle righe.
-    // La differenza non e' stilistica: con il JOIN, la query dei totali
-    // sommerebbe solo le righe del prodotto filtrato, restituendo un
-    // "fatturato" che non corrisponde al valore degli ordini elencati
-    // (dove invece compare il totale INTERO dell'ordine). Con EXISTS il
-    // filtro seleziona gli ordini che contengono quel prodotto, e i
-    // totali restano coerenti con quello che si vede in tabella.
+    // Filtro sul prodotto con EXISTS e non con JOIN: con il JOIN i totali sommerebbero solo
+    // le righe del prodotto, un fatturato diverso dal valore degli ordini elencati (che
+    // mostrano il totale intero). Con EXISTS i totali restano coerenti con la tabella.
     if AFiltri.ProdottoID > 0 then
     begin
       LCondizioni.Add(
@@ -171,9 +137,8 @@ begin
       AParams.Add(AFiltri.DataFine);
     end;
 
-    // A differenza del tool MCP, qui gli annullati NON sono esclusi
-    // d'ufficio: nella schermata sono un filtro come gli altri, perche'
-    // un operatore ha motivi legittimi per cercarli.
+    // A differenza del tool MCP gli annullati non sono esclusi: in schermata sono un filtro
+    // come gli altri.
     if AFiltri.Stato <> '' then
     begin
       LCondizioni.Add('ov.stato = :stato');
@@ -216,7 +181,7 @@ begin
   try
     LWhere := CostruisciWhere(AFiltri, LParams);
 
-    // --- Totali: PRIMA e senza LIMIT, sull'insieme filtrato completo.
+    // Totali: prima, senza LIMIT, sull'insieme filtrato completo.
     LAutoQuery := TDB.GetInstance.getQueryResult(
       SQL_TOTALI_BASE + LWhere, LParams.ToArray);
     try
@@ -228,12 +193,9 @@ begin
       LAutoQuery.Free;
     end;
 
-    // --- Pagina di dati.
-    // LIMIT e OFFSET sono interpolati come interi gia' validati e non
-    // passati come parametri: restando in coda alla query, legarli
-    // costringerebbe a tenere conto della loro posizione nell'array
-    // Params, che TDB lega posizionalmente. Sono Integer, quindi non
-    // c'e' superficie di injection.
+    // Pagina di dati. LIMIT e OFFSET sono interpolati come interi gia' validati: legarli
+    // costringerebbe a tenere conto della posizione nei Params (legati per posizione). Sono
+    // Integer: nessun rischio di injection.
     LSQL := SQL_ELENCO_BASE + LWhere +
       'ORDER BY ov.data_ordine DESC, ov.id DESC ' +
       'LIMIT ' + LPerPagina.ToString + ' OFFSET ' + LOffset.ToString;
@@ -279,10 +241,8 @@ begin
   LParams.Free;
 end;
 
-// Righe di un ordine. Restituisce anche il totale calcolato sulle righe
-// lette, cosi' il chiamante non deve rifare la somma con una seconda
-// query: qui il ciclo copre TUTTE le righe dell'ordine, non un campione,
-// quindi accumulare durante la lettura e' corretto.
+// Righe di un ordine, con il totale calcolato su tutte (non su un campione), quindi
+// accumulare durante la lettura e' corretto.
 class function TServizioOrdiniVendita.RigheOrdineToJSON(AOrdineID: Integer;
   out ATotale: Currency): TJSONArray;
 var
@@ -299,9 +259,8 @@ begin
     '       ovr.quantita, ovr.unita_misura, ovr.prezzo_unitario ' +
     'FROM ordini_vendita_righe ovr ' +
     'JOIN anagrafiche_prodotti_finiti apf ON apf.id = ovr.prodotto_finito_id ' +
-    // LEFT JOIN: il lotto puo' non essere ancora assegnato (ordine
-    // confermato ma non spedito). Con un JOIN interno quelle righe
-    // sparirebbero dal dettaglio, che sarebbe un errore silenzioso.
+    // LEFT JOIN: il lotto puo' non essere assegnato (ordine confermato non spedito); con un
+    // JOIN interno le righe sparirebbero in silenzio.
     'LEFT JOIN lotti_prodotti_finiti lpf ON lpf.id = ovr.lotto_prodotto_finito_id ' +
     'WHERE ovr.ordine_vendita_id = :ordine_vendita_id ' +
     'ORDER BY ovr.id', [AOrdineID]);

@@ -11,20 +11,12 @@ uses
   DbU;
 
 type
-  // Rappresenta una riga/componente di una versione di ricetta di
-  // prodotto finito (tabella ricette_prodotti_finiti_righe). Stesso
-  // principio XOR di TRicettaSemilavoratoRiga: il componente e'
-  // ESATTAMENTE UNO tra una materia prima (MateriaPrimaID) o un
-  // semilavorato (SemilavoratoID) — mai entrambi, mai nessuno
-  // (chk_componente_prodotto_finito).
-  //
-  // Nota di naming: qui il DDL chiama il secondo campo semplicemente
-  // semilavorato_id, non semilavorato_figlio_id come in
-  // ricette_semilavorati_righe — coerente col fatto che qui non c'e'
-  // ricorsione: un prodotto finito e' sempre la radice dell'albero di
-  // distinta base, non viene mai referenziato come componente di
-  // qualcos'altro (a differenza di un semilavorato, che puo' essere sia
-  // "genitore" sia "figlio" in ricette_semilavorati_righe).
+  // Componente di una versione di ricetta di prodotto finito
+  // (ricette_prodotti_finiti_righe). Il componente e' esattamente uno fra materia prima
+  // (MateriaPrimaID) e semilavorato (SemilavoratoID) (chk_componente_prodotto_finito). Qui
+  // il campo si chiama semilavorato_id, non semilavorato_figlio_id come in
+  // ricette_semilavorati_righe: non c'e' ricorsione, il prodotto finito e' sempre la radice
+  // della distinta.
   TRicettaProdottoFinitoRiga = class
   private
     FID: Integer;
@@ -50,26 +42,19 @@ type
     property UnitaMisuraDose: string read FUnitaMisuraDose write FUnitaMisuraDose;
     property IsComponenteMateriaPrima: Boolean read GetIsComponenteMateriaPrima;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_ricette_prodotti_finiti_righe_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TRicettaProdottoFinitoRiga;
     class function GetByRicetta(ARicettaID: Integer): TObjectList<TRicettaProdottoFinitoRiga>;
     class function Delete(AID: Integer): Boolean;
 
     function Insert: Integer; overload;   // restituisce l'ID generato (connessione pooled propria)
 
-    // Overload pensato per TServizioRicette.ApplicaSostituzioneIngrediente:
-    // quando si crea una nuova versione di ricetta ricopiandone le righe
-    // (con una sostituita), tutte le insert devono andare a buon fine
-    // insieme — una nuova versione con solo META' delle righe copiate
-    // sarebbe un dato di ricetta silenziosamente sbagliato, peggiore di un
-    // errore esplicito. Vedi il commento gemello in
-    // TConsumoProduzioneSemilavorato.Insert(AConnection) per lo stesso
-    // ragionamento applicato alla giacenza.
+    // Overload per TServizioRicette.ApplicaSostituzioneIngrediente: copiando le righe in
+    // una nuova versione le insert vanno tutte o nessuna, perche' una ricetta con meta'
+    // righe sarebbe un dato silenziosamente sbagliato. Vedi
+    // TConsumoProduzioneSemilavorato.Insert(AConnection).
     function Insert(AConnection: TFDConnection): Integer; overload;
 
     function Update: Boolean;
@@ -87,8 +72,6 @@ const
     'quantita_standard, unita_misura_dose, creato_il, aggiornato_il ' +
     'FROM ricette_prodotti_finiti_righe ';
 
-{ TRicettaProdottoFinitoRiga }
-
 constructor TRicettaProdottoFinitoRiga.Create;
 begin
   inherited Create;
@@ -104,9 +87,8 @@ end;
 
 procedure TRicettaProdottoFinitoRiga.EnsureComponenteValido;
 begin
-  // Replica lato Delphi il CHECK chk_componente_prodotto_finito:
-  // esattamente uno tra MateriaPrimaID e SemilavoratoID deve essere
-  // valorizzato.
+  // Replica il CHECK chk_componente_prodotto_finito: esattamente uno fra MateriaPrimaID e
+  // SemilavoratoID.
   if (FMateriaPrimaID <> 0) = (FSemilavoratoID <> 0) then
     raise Exception.Create(
       'TRicettaProdottoFinitoRiga: la riga deve avere ESATTAMENTE uno tra ' +
@@ -178,8 +160,7 @@ end;
 
 class function TRicettaProdottoFinitoRiga.Delete(AID: Integer): Boolean;
 begin
-  // Nessun'altra tabella referenzia ricette_prodotti_finiti_righe come
-  // FK: nodo foglia nello schema.
+  // Nodo foglia: nessuna FK lo referenzia.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ricette_prodotti_finiti_righe WHERE id = :id', [AID]);
 end;
@@ -194,8 +175,7 @@ begin
   if FMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FMateriaPrimaID;
   if FSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FSemilavoratoID;
 
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ricette_prodotti_finiti_righe ' +
     '(ricetta_id, materia_prima_id, semilavorato_id, quantita_standard, unita_misura_dose) ' +
@@ -222,9 +202,7 @@ begin
   if FMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FMateriaPrimaID;
   if FSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FSemilavoratoID;
 
-  // Stessa INSERT dell'overload senza parametri, ma su AConnection (gia'
-  // dentro una transazione aperta dal chiamante, tipicamente
-  // TServizioRicette.ApplicaSostituzioneIngrediente).
+  // Come l'overload senza parametri, ma su AConnection (transazione del chiamante).
   LQuery := TFDQuery.Create(nil);
   try
     LQuery.Connection := AConnection;
@@ -235,28 +213,13 @@ begin
       'RETURNING id, creato_il, aggiornato_il';
     LQuery.ParamByName('ricetta_id').AsInteger := FRicettaID;
 
-    // BUG CORRETTO (osservato in log durante ApplicaAdattamentoRicetta,
-    // sostituzione semilavorato->semilavorato): esattamente uno fra
-    // materia_prima_id e semilavorato_id e' SEMPRE Null per costruzione
-    // (vedi EnsureComponenteValido) - un Variant Null "puro" non porta
-    // nessuna informazione di tipo, quindi FireDAC manda a PostgreSQL un
-    // parametro "di tipo sconosciuto" e il driver lo rifiuta con
-    // "[FireDAC][Phys][PG]-335 ... data type is unknown". Questo overload
-    // (a differenza di Insert/Update, che passano da TDB.getQueryResult,
-    // dove lo stesso problema e' gia' risolto - vedi il commento li') deve
-    // creare la TFDQuery a mano perche' gira su AConnection, una
-    // connessione condivisa gia' aperta dal chiamante dentro una
-    // transazione (TServizioRicette.ApplicaAdattamentoRicetta), non su una
-    // connessione propria dal pool: non puo' quindi riusare quell'helper.
-    // Rimedio (corretto il 01/10/2026): il parametro Null va dichiarato con il tipo
-    // REALE della colonna, ftInteger (materia_prima_id e semilavorato_id sono INTEGER).
-    // La prima versione usava ftWideString contando sul fatto che PostgreSQL
-    // convertisse da solo un NULL "testo": non e' cosi'. FireDAC manda il parametro
-    // come character varying e PostgreSQL rifiuta l'INSERT con
-    // 'la colonna "semilavorato_id" e' di tipo integer ma l'espressione e' di tipo
-    // character varying' (visto applicando una sostituzione semilavorato ->
-    // materia prima, dove semilavorato_id della nuova riga e' Null). Con ftInteger il
-    // NULL arriva gia' del tipo giusto e non serve nessuna conversione.
+    // Uno fra materia_prima_id e semilavorato_id e' sempre Null, e un Variant Null puro non
+    // porta il tipo: FireDAC manda un parametro sconosciuto e PostgreSQL rifiuta con "-335
+    // ... data type is unknown". Questo overload crea la TFDQuery a mano perche' gira su
+    // AConnection (transazione del chiamante) e non puo' riusare l'helper di
+    // TDB.getQueryResult. Il parametro Null va dichiarato col tipo reale, ftInteger: con
+    // ftWideString (prima versione, 01/10/2026) PostgreSQL rifiuta l'INSERT con "colonna di
+    // tipo integer ma espressione character varying".
     if VarIsNull(LMateriaPrimaParam) then
     begin
       LQuery.ParamByName('materia_prima_id').DataType := ftInteger;
@@ -296,9 +259,7 @@ begin
   if FMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FMateriaPrimaID;
   if FSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FSemilavoratoID;
 
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_ricette_prodotti_finiti_righe_aggiornato_il lo valorizza
-  // automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ricette_prodotti_finiti_righe SET ricetta_id = :ricetta_id, ' +
     'materia_prima_id = :materia_prima_id, semilavorato_id = :semilavorato_id, ' +
@@ -351,8 +312,7 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('ricetta_id', LValInt) then
     FRicettaID := LValInt;
   if AJSON.TryGetValue<Integer>('materia_prima_id', LValInt) then
@@ -362,8 +322,7 @@ begin
   if AJSON.TryGetValue<string>('unita_misura_dose', LValStr) then
     FUnitaMisuraDose := LValStr;
 
-  // Campo numerico decimale: letto come TJSONNumber per preservarne la
-  // precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita_standard', LValNum) and (LValNum is TJSONNumber) then
     FQuantitaStandard := TJSONNumber(LValNum).AsDouble;
 end;

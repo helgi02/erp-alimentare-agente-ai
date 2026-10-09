@@ -40,11 +40,9 @@ type
     property Cap: string read FCap write FCap;
     property Paese: string read FPaese write FPaese;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TFornitore;
     class function GetAll: TObjectList<TFornitore>;
     class function Delete(AID: Integer): Boolean;
@@ -64,8 +62,6 @@ const
     'SELECT id, ragione_sociale, partita_iva, email, telefono, ' +
     'via, citta, provincia, cap, paese, creato_il, aggiornato_il ' +
     'FROM fornitori ';
-
-{ TFornitore }
 
 constructor TFornitore.Create;
 begin
@@ -141,8 +137,7 @@ function TFornitore.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti:
-  // sono valorizzati dal DEFAULT del database (now())
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO fornitori ' +
     '(ragione_sociale, partita_iva, email, telefono, via, citta, provincia, cap, paese) ' +
@@ -163,10 +158,7 @@ function TFornitore.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_fornitori_aggiornato_il lo valorizza automaticamente.
-  // Lo rileggiamo tramite RETURNING per mantenere l'oggetto coerente
-  // con lo stato effettivo sul database.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE fornitori SET ragione_sociale = :ragione_sociale, partita_iva = :partita_iva, ' +
     'email = :email, telefono = :telefono, via = :via, citta = :citta, ' +
@@ -213,8 +205,7 @@ end;
 
 procedure TFornitore.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in ingresso:
-  // sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('ragione_sociale', FRagioneSociale) then ;
   if AJSON.TryGetValue<string>('partita_iva', FPartitaIva) then ;
   if AJSON.TryGetValue<string>('email', FEmail) then ;

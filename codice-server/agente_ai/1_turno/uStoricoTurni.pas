@@ -1,41 +1,14 @@
 unit uStoricoTurni;
 
-(* ============================================================================
-  STORICO DEI TURNI - tappa 8 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/history.py e della
-  struttura TurnoStorico di contratti.py (specifica: CONTRATTI.md, paragrafo 8).
-
-  -- Perche' uno storico diverso da quello dell'orchestratore attuale -----------
-  L'orchestratore attuale conserva la conversazione come elenco di messaggi
-  chat (utente, assistente, tool). Il Planner non lavora sui messaggi: gli
-  serve, per ogni turno passato, COSA era stato chiesto, QUALE piano ne era
-  uscito, com'e' andata e in che STATO e' rimasto il turno. Un record per
-  turno:
-
-    domanda        il messaggio dell'utente
-    piano          il piano prodotto (nil se non valido)
-    esiti          i passi eseguiti: tool, argomenti, esito, risultato RIDOTTO
-    risposta       il testo dato all'utente
-    stato          concluso | in_attesa_scelta | in_attesa_conferma
-    tool_in_attesa la scrittura proposta che aspetta la conferma
-
-  Lo stato e' cio' che rende possibili i turni successivi: "si', procedi"
-  ha senso solo se il turno prima e' in_attesa_conferma, "il secondo" solo
-  se e' in_attesa_scelta.
-
-  -- Cosa vede il Planner (PerLLM) -------------------------------------------------
-  Gli ultimi NTurni turni (6). Per ciascuno: domanda, piano (esito e azioni,
-  con il tool quando c'era), risposta, stato. I RISULTATI dei tool solo per
-  gli ultimi EsitiTurni turni (nel run di riferimento: 1) e in forma ridotta,
-  per non far crescere il prompt: servono ai seguiti che usano un valore
-  appena visto ("e' gia' stato spedito?" ha bisogno degli id dei lotti).
-
-  -- Riduzione dei risultati (RiduciOutput) -----------------------------------------
-  Gli array vengono troncati ai primi MaxElementi, con accanto il campo
-  "<nome>__totale" che dice quanti erano. Gli id restano. Per lo storico
-  (AAnnidati = False) gli array di soli valori (id, codici) restano INTERI e
-  gli array dentro gli elementi di un array non vengono riportati.
-  ============================================================================ *)
+// Storico dei turni per il pianificatore: un record per turno con domanda, piano, esiti,
+// risposta e stato.
+// Lo stato rende possibili i turni successivi: "si', procedi" ha senso solo dopo
+// in_attesa_conferma, "il secondo" solo dopo in_attesa_scelta.
+// Al Planner arrivano gli ultimi NTurni turni; i risultati dei tool solo per gli ultimi
+// EsitiTurni, ridotti da RiduciOutput per non gonfiare il prompt.
+// RiduciOutput tronca gli array ai primi MaxElementi e aggiunge "<nome>__totale" con il
+// numero originale; gli id restano. Nello storico gli array di soli valori (id, codici)
+// restano interi e gli array annidati non si riportano.
 
 interface
 
@@ -72,8 +45,7 @@ type
     MaxElementi: Integer;   // elementi di un array tenuti nello storico
     EsitiTurni: Integer;    // ultimi turni di cui il Planner vede i risultati
     Turni: TObjectList<TTurnoStorico>;
-    // Valori del run conv_20261001_235839: 6 turni, 3 elementi, esiti
-    // dell'ultimo turno.
+    // Valori predefiniti: 6 turni, 3 elementi, esiti solo dell'ultimo turno.
     constructor Create;
     destructor Destroy; override;
 
@@ -175,8 +147,6 @@ begin
   Result := Riduci(AValore, AMaxElementi, AAnnidati, False);
 end;
 
-{ TTurnoStorico }
-
 constructor TTurnoStorico.Create;
 begin
   inherited;
@@ -190,8 +160,6 @@ begin
   Esiti.Free;
   inherited;
 end;
-
-{ TStoricoTurni }
 
 constructor TStoricoTurni.Create;
 begin

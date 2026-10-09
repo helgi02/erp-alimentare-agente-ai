@@ -1,42 +1,17 @@
 unit uContrattiTool;
 
-(* ============================================================================
-  CONTRATTI DEI TOOL - tappa 2 del porting del pianificatore.
-
-  -- Che cosa e' un contratto ------------------------------------------------
-  Il server MCP dichiara, per ogni tool, nome, descrizione e schema dei
-  parametri di INPUT (tools/list). Al pianificatore servono in piu' quattro
-  informazioni che il protocollo non porta:
-
-    1. OutputSchema      la forma del risultato quando il tool riesce. Serve a
-                         controllare, PRIMA di eseguire, i riferimenti fra i
-                         passi di un piano ("$1.lotti_prodotto_finito_id":
-                         il campo esiste? e' del tipo che il parametro vuole?)
-                         e, DOPO, che il risultato sia quello dichiarato.
-    2. Effetto           lettura o scrittura sul database.
-    3. RichiedeConferma  una scrittura parte solo dopo la conferma dell'utente.
-    4. Vincoli sugli input che il tool controlla nel proprio codice ma che lo
-       schema del server non esprime: la forma degli elementi di un array
-       (VincoliInput) e i gruppi "serve almeno uno fra" (AlmenoUno).
-
-  Nel prototipo Python queste informazioni stavano in un file solo
-  (scripts/prototipo_pianificatore/pianificatore/mcp_delphi.py: DEFINIZIONI,
-  INTEGRAZIONI_INPUT, ALMENO_UNO), perche' Delphi non le dichiarava.
-
-  -- Dove sono scritte -------------------------------------------------------
-  Ogni provider dichiara i contratti dei PROPRI tool nella class function
-  ContrattiTool, nella stessa unit in cui costruisce le risposte (tools/
-  u...ToolProvider.pas): chi cambia la forma di una risposta ha il contratto
-  sotto gli occhi. Qui ci sono solo i tipi comuni, il registro in cui i
-  provider vengono raccolti all'avvio e la funzione che compone lo schema di
-  input effettivo. Nessun contratto e' scritto in questa unit.
-
-  -- Ciclo di vita -----------------------------------------------------------
-  TRegistroContrattiTool.Registra va chiamato solo all'avvio, in
-  uFrmMain.FormCreate, accanto alla registrazione del provider nel server MCP
-  (stesso principio di TRegistroProviderMCP). Da li' in poi il registro e'
-  solo letto, anche da piu' thread: nessun lock.
-  ============================================================================ *)
+// Contratti dei tool per il pianificatore.
+// Il server MCP dichiara per ogni tool nome, descrizione e schema di input. Al
+// pianificatore servono in piu': OutputSchema (forma del risultato, per controllare i
+// riferimenti fra i passi prima di eseguire e il risultato dopo), Effetto (lettura o
+// scrittura), RichiedeConferma (una scrittura parte solo dopo la conferma dell'utente) e i
+// vincoli sugli input che lo schema del server non esprime (forma degli elementi di un
+// array, gruppi "serve almeno uno fra").
+// Ogni provider dichiara i contratti dei propri tool in ContrattiTool, nella stessa unit
+// che costruisce le risposte: chi cambia una risposta ha il contratto sotto gli occhi. Qui
+// ci sono solo i tipi comuni, il registro e la composizione dello schema di input.
+// Registra va chiamato solo all'avvio, in FormCreate, accanto alla registrazione del
+// provider MCP; poi il registro e' solo letto, anche da piu' thread, senza lock.
 
 interface
 
@@ -48,10 +23,9 @@ uses
 type
   TEffettoTool = (etLettura, etScrittura);
 
-  // Vincolo su UN parametro di input: frammento di JSON Schema che si
-  // aggiunge allo schema dichiarato dal server per quel parametro.
-  // Es. per "lotti_prodotto_finito_id" (che il server dichiara solo come
-  // "array"): {"minItems":1,"items":{"type":"integer","minimum":1}}.
+  // Vincolo su un parametro: frammento di JSON Schema aggiunto a quello del server. Es. per
+  // "lotti_prodotto_finito_id" (per il server solo "array"):
+  // {"minItems":1,"items":{"type":"integer","minimum":1}}.
   TVincoloParametro = record
     Parametro: string;
     Schema: string;      // testo JSON
@@ -60,16 +34,15 @@ type
   TContrattoTool = record
     Nome: string;
     Effetto: TEffettoTool;
-    // Ha senso solo per le scritture; per le letture e' False.
+    // Solo per le scritture.
     RichiedeConferma: Boolean;
-    // JSON Schema (testo) del risultato con esito positivo. Disambiguazioni
-    // ed errori hanno una forma comune a tutti i tool e non stanno qui.
-    // "required" elenca i campi SEMPRE presenti: sono gli unici a cui un
-    // piano puo' fare riferimento.
+    // JSON Schema del risultato con esito positivo (disambiguazioni ed errori hanno una
+    // forma comune e non stanno qui). "required" elenca i campi sempre presenti: gli unici
+    // a cui un piano puo' fare riferimento.
     OutputSchema: string;
     VincoliInput: TArray<TVincoloParametro>;
-    // Ogni gruppo e' un elenco di parametri di cui ne serve almeno uno
-    // (es. prodotto_finito_id oppure nome_prodotto).
+    // Ogni gruppo elenca parametri di cui ne serve almeno uno (es. prodotto_finito_id
+    // oppure nome_prodotto).
     AlmenoUno: TArray<TArray<string>>;
   end;
 
@@ -79,18 +52,17 @@ type
     class constructor Create;
     class destructor Destroy;
   public
-    // Registra i contratti di un provider. Solleva un'eccezione, fermando
-    // l'avvio del server, se un nome e' vuoto o gia' registrato o se uno
-    // schema non e' un oggetto JSON valido: un contratto sbagliato deve
-    // emergere subito, non al primo piano che lo usa.
+    // Registra i contratti di un provider. Solleva un'eccezione, fermando l'avvio, se un
+    // nome e' vuoto o duplicato o uno schema non e' un oggetto JSON: un contratto sbagliato
+    // deve emergere subito, non al primo piano che lo usa.
     class procedure Registra(const AContratti: TArray<TContrattoTool>);
     // False se nessun provider ha dichiarato un contratto per ANome.
     class function Trova(const ANome: string; out AContratto: TContrattoTool): Boolean;
     class function Tutti: TArray<TContrattoTool>;
   end;
 
-// Costruttori dei record, per scrivere i contratti nei provider in forma
-// compatta. AVincoliInput e AAlmenoUno si omettono quando non servono.
+// Costruttori per scrivere i contratti in forma compatta; AVincoliInput e AAlmenoUno si
+// omettono se non servono.
 function VincoloParametro(const AParametro, ASchema: string): TVincoloParametro;
 function ContrattoTool(const ANome: string; AEffetto: TEffettoTool;
   ARichiedeConferma: Boolean; const AOutputSchema: string;
@@ -99,19 +71,11 @@ function ContrattoTool(const ANome: string; AEffetto: TEffettoTool;
 
 function EffettoInTesto(AEffetto: TEffettoTool): string;
 
-// Schema di input EFFETTIVO di un tool: quello dichiarato dal server
-// (ASchemaServer, il campo "parameters"/"inputSchema"; resta del chiamante)
-// completato con i vincoli del contratto. E' lo schema che il validatore del
-// piano usera' per controllare gli argomenti. Stessa composizione di
-// _input_schema in mcp_delphi.py:
-//   - "type", "properties" e "required" sempre presenti;
-//   - per ogni vincolo, le chiavi del frammento sostituiscono o si aggiungono
-//     a quelle del parametro;
-//   - i gruppi "almeno uno" finiscono sotto la chiave "x_almeno_uno" (il
-//     prefisso x_ segna le chiavi che non sono JSON Schema standard e che
-//     non vanno mandate al modello).
-// Il risultato e' del chiamante. Solleva un'eccezione se un vincolo nomina
-// un parametro che il server non dichiara.
+// Schema di input effettivo di un tool: quello del server (ASchemaServer, resta del
+// chiamante) completato con i vincoli del contratto. Le chiavi del frammento sostituiscono
+// o si aggiungono a quelle del parametro; i gruppi "almeno uno" vanno sotto "x_almeno_uno"
+// (il prefisso x_ segna le chiavi non standard, da non mandare al modello). Solleva
+// un'eccezione se un vincolo nomina un parametro che il server non dichiara.
 function SchemaInputEffettivo(const AContratto: TContrattoTool;
   ASchemaServer: TJSONObject): TJSONObject;
 
@@ -221,8 +185,6 @@ begin
     raise;
   end;
 end;
-
-{ TRegistroContrattiTool }
 
 class constructor TRegistroContrattiTool.Create;
 begin

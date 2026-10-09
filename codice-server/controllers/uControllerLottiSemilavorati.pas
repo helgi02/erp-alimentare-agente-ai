@@ -10,13 +10,8 @@ uses
   uServiziLotti;
 
 type
-  // Endpoint di sola lettura dei lotti di semilavorato (tabella
-  // lotti_semilavorati). Vedi il commento gemello e piu' esteso in
-  // uControllerLottiMateriePrime.pas: stessa struttura, stessi motivi.
-  //
-  //   GET /api/lotti-semilavorati
-  //   GET /api/lotti-semilavorati?semilavorato_id=101
-  //   GET /api/lotti-semilavorati/(id)
+  // Lettura dei lotti di semilavorato. Stessa struttura di uControllerLottiMateriePrime.
+  // GET /api/lotti-semilavorati, ?semilavorato_id=101, /(id).
   [MVCPath('/api/lotti-semilavorati')]
   TControllerLottiSemilavorati = class(TMVCController)
   private
@@ -32,8 +27,6 @@ type
   end;
 
 implementation
-
-{ TControllerLottiSemilavorati }
 
 function TControllerLottiSemilavorati.ParamIntero(ctx: TWebContext;
   const ANome: string): Integer;

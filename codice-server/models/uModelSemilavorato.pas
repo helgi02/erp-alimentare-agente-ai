@@ -9,12 +9,9 @@ uses
   DbU, uModelAllergene;
 
 type
-  // Rappresenta l'anagrafica di un semilavorato prodotto internamente
-  // (tabella anagrafiche_semilavorati). Struttura identica a
-  // TMateriaPrima: stessa forma (codice univoco + denominazione + audit),
-  // ma entita' di dominio distinta, referenziata da ricette (sia come
-  // componente di altre ricette semilavorati, sia come ingrediente di
-  // ricette prodotti finiti) e da lotti_semilavorati.
+  // Anagrafica di un semilavorato prodotto internamente (anagrafiche_semilavorati). Stessa
+  // forma di TMateriaPrima, ma entita' distinta, referenziata dalle ricette (come
+  // componente di semilavorati e prodotti finiti) e da lotti_semilavorati.
   TSemilavorato = class
   private
     FID: Integer;
@@ -31,12 +28,9 @@ type
     property Codice: string read FCodice write FCodice;
     property Denominazione: string read FDenominazione write FDenominazione;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_anagrafiche_semilavorati_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TSemilavorato;
     class function GetByCodice(const ACodice: string): TSemilavorato;
     class function GetAll: TObjectList<TSemilavorato>;
@@ -48,9 +42,8 @@ type
     function ToJSONObject: TJSONObject;
     procedure FromJSONObject(AJSON: TJSONObject);
 
-    // Allergeni dichiarati per questo semilavorato (tabella ponte
-    // anagrafiche_semilavorati_allergeni). Wrapper sottile sulla logica
-    // condivisa in TAllergene: nessuna query duplicata qui.
+    // Allergeni dichiarati (tabella ponte anagrafiche_semilavorati_allergeni): wrapper
+    // sottile su TAllergene.
     class function GetAllergeni(ASemilavoratoID: Integer): TObjectList<TAllergene>;
     class procedure SetAllergeni(ASemilavoratoID: Integer; const AAllergeneIDs: TArray<Integer>);
 
@@ -62,8 +55,6 @@ const
   SQL_SELECT_BASE =
     'SELECT id, codice, denominazione, creato_il, aggiornato_il ' +
     'FROM anagrafiche_semilavorati ';
-
-{ TSemilavorato }
 
 constructor TSemilavorato.Create;
 begin
@@ -103,7 +94,7 @@ class function TSemilavorato.GetByCodice(const ACodice: string): TSemilavorato;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // codice ha un vincolo UNIQUE (anagrafiche_semilavorati_codice_key).
+  // codice e' UNIQUE (anagrafiche_semilavorati_codice_key).
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -126,8 +117,7 @@ var
 begin
   Result := TObjectList<TSemilavorato>.Create(True); // possiede gli oggetti
 
-  // L'ordinamento per denominazione sfrutta l'indice
-  // idx_anagrafiche_semilavorati_denominazione gia' presente sul DB.
+  // L'ordine per denominazione usa l'indice idx_anagrafiche_semilavorati_denominazione.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'ORDER BY denominazione');
   try
@@ -145,10 +135,8 @@ end;
 
 class function TSemilavorato.Delete(AID: Integer): Boolean;
 begin
-  // Semilavorato e' referenziato da ricette_semilavorati,
-  // ricette_prodotti_finiti_righe (come componente) e
-  // lotti_semilavorati: in assenza di ON DELETE CASCADE lato DB, la
-  // query fallisce se esistono record collegati. Comportamento voluto.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM anagrafiche_semilavorati WHERE id = :id', [AID]);
 end;
@@ -157,8 +145,7 @@ function TSemilavorato.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti:
-  // sono valorizzati dal DEFAULT del database (now()).
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO anagrafiche_semilavorati (codice, denominazione) ' +
     'VALUES (:codice, :denominazione) ' +
@@ -178,9 +165,7 @@ function TSemilavorato.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_anagrafiche_semilavorati_aggiornato_il lo valorizza
-  // automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE anagrafiche_semilavorati SET codice = :codice, ' +
     'denominazione = :denominazione ' +
@@ -219,8 +204,7 @@ end;
 
 procedure TSemilavorato.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in ingresso:
-  // sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('codice', FCodice) then ;
   if AJSON.TryGetValue<string>('denominazione', FDenominazione) then ;
 end;

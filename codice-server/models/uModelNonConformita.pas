@@ -10,30 +10,16 @@ uses
   DbU;
 
 type
-  // Rappresenta una non conformita' rilevata su un lotto (tabella
-  // non_conformita) — l'evento che innesca lo scenario di
-  // ritiro/richiamo (2.1). Da qui l'agente MCP identifica, tramite i
-  // lotti coinvolti, tutti i prodotti finiti che li impiegano
-  // (risalendo consumi_produzione_*), verifica quali sono ancora in
-  // giacenza e quali gia' presso i clienti (tramite ordini_vendita_righe
-  // e ddt_uscita), e determina se generare solo la Scheda di Notifica
-  // OSA o anche il Modello di Richiamo al Consumatore.
-  //
-  // A differenza dei pattern XOR gia' visti (ricette, consumi), qui il
-  // CHECK del DDL (chk_lotto_non_conformita) e' un OR, non uno XOR:
-  // almeno UNO tra i tre lotti deve essere valorizzato, ma non e' vietato
-  // che lo siano piu' di uno. Questo riflette un caso reale: una singola
-  // non conformita' puo' riguardare contemporaneamente, ad esempio, sia
-  // il lotto di materia prima contaminato sia i lotti di prodotto finito
-  // che lo hanno gia' incorporato, se si vuole tracciarli sotto lo stesso
-  // codice_nc invece di aprire NC separate collegate manualmente.
-  //
-  // StatoNC e' un ENUM PostgreSQL nativo (stato_nc_enum), non un
-  // VARCHAR con CHECK come lo Stato di TOrdineFornitore/TOrdineVendita:
-  // FireDAC lo restituisce comunque come stringa via AsString, quindi
-  // qui lo trattiamo come string per semplicita' — la validazione dei
-  // valori ammessi resta comunque replicata lato Delphi in
-  // EnsureStatoValido, per lo stesso motivo delle altre EnsureXxxValido.
+  // Non conformita' su un lotto (non_conformita): l'evento che innesca il richiamo (2.1).
+  // Dai lotti coinvolti si risale ai prodotti finiti (consumi_produzione_*), si verifica
+  // quali sono in giacenza e quali dai clienti (ordini_vendita_righe, ddt_uscita) e si
+  // decide se generare solo la Scheda di Notifica OSA o anche il Modello di Richiamo al
+  // Consumatore.
+  // Il CHECK chk_lotto_non_conformita e' un OR, non uno XOR: almeno uno dei tre lotti,
+  // anche piu' di uno (una NC puo' riguardare la materia prima contaminata e i prodotti
+  // finiti che l'hanno incorporata, sotto lo stesso codice_nc).
+  // StatoNC e' un ENUM PostgreSQL (stato_nc_enum) ma si tratta come string (FireDAC lo
+  // restituisce via AsString); i valori ammessi sono validati in EnsureStatoValido.
   TNonConformita = class
   private
     FID: Integer;
@@ -64,12 +50,9 @@ type
     property LottoSemilavoratoID: Integer read FLottoSemilavoratoID write FLottoSemilavoratoID;
     property LottoProdottoFinitoID: Integer read FLottoProdottoFinitoID write FLottoProdottoFinitoID;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_non_conformita_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TNonConformita;
     class function GetByCodice(const ACodiceNC: string): TNonConformita;
     class function GetAll: TObjectList<TNonConformita>;
@@ -96,11 +79,8 @@ const
     'creato_il, aggiornato_il ' +
     'FROM non_conformita ';
 
-  // Valori ammessi dall'ENUM stato_nc_enum: replicati qui per validare
-  // lato Delphi prima di arrivare al DB.
+  // Valori dell'ENUM stato_nc_enum, validati qui prima di arrivare al DB.
   STATI_VALIDI: array[0..2] of string = ('aperta', 'in_gestione', 'chiusa');
-
-{ TNonConformita }
 
 constructor TNonConformita.Create;
 begin
@@ -134,10 +114,8 @@ end;
 
 procedure TNonConformita.EnsureAlmenoUnLottoValido;
 begin
-  // Replica lato Delphi il CHECK chk_lotto_non_conformita: e' un OR, non
-  // uno XOR come negli altri EnsureXxxValido di questo progetto — basta
-  // che ALMENO UNO dei tre lotti sia valorizzato, possono esserlo anche
-  // due o tutti e tre.
+  // Replica il CHECK chk_lotto_non_conformita: OR, non XOR; basta almeno un lotto
+  // valorizzato.
   if (FLottoMateriaPrimaID = 0) and (FLottoSemilavoratoID = 0) and (FLottoProdottoFinitoID = 0) then
     raise Exception.Create(
       'TNonConformita: deve essere valorizzato almeno uno tra LottoMateriaPrimaID, ' +
@@ -195,7 +173,7 @@ class function TNonConformita.GetByCodice(const ACodiceNC: string): TNonConformi
 var
   LAutoQuery: TAutoQuery;
 begin
-  // codice_nc ha un vincolo UNIQUE.
+  // codice_nc e' UNIQUE.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -238,13 +216,11 @@ var
   LAutoQuery: TAutoQuery;
   LNC: TNonConformita;
 begin
-  // Uso tipico: GetByStato('aperta') per elencare le non conformita'
-  // ancora da gestire.
+  // Es. GetByStato('aperta') per le non conformita' da gestire.
   Result := TObjectList<TNonConformita>.Create(True);
 
-  // Stesso cast esplicito di Insert/Update (vedi commento in Insert): un
-  // confronto stato_nc = :stato_nc con :stato_nc legato come character
-  // varying fallisce con lo stesso errore di tipo, anche in una WHERE.
+  // Stesso cast esplicito di Insert: anche in una WHERE, :stato_nc legato come character
+  // varying darebbe lo stesso errore di tipo.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'WHERE stato_nc = :stato_nc::stato_nc_enum ORDER BY data_apertura',
     [AStato]);
@@ -266,9 +242,8 @@ var
   LAutoQuery: TAutoQuery;
   LNC: TNonConformita;
 begin
-  // Verifica se un dato lotto di materia prima ha gia' una o piu' non
-  // conformita' associate: primo controllo dell'agente MCP quando avvia
-  // lo scenario di ritiro/richiamo.
+  // Le non conformita' gia' associate a un lotto di materia prima: primo controllo del
+  // richiamo.
   Result := TObjectList<TNonConformita>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -338,10 +313,7 @@ end;
 
 class function TNonConformita.Delete(AID: Integer): Boolean;
 begin
-  // Nessun'altra tabella referenzia non_conformita come FK: nodo foglia
-  // nello schema. Va comunque usata con cautela: e' un dato di
-  // compliance (Reg. CE 178/2002), non un semplice record operativo. Per
-  // chiudere una NC si usa stato_nc = 'chiusa', non Delete.
+  // Nodo foglia: nessuna FK lo referenzia.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM non_conformita WHERE id = :id', [AID]);
 end;
@@ -358,29 +330,17 @@ begin
   if FLottoSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FLottoSemilavoratoID;
   if FLottoProdottoFinitoID = 0 then LProdottoFinitoParam := Null else LProdottoFinitoParam := FLottoProdottoFinitoID;
 
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()). codice_nc ha un
-  // vincolo UNIQUE: un duplicato solleva un'eccezione da gestire a
-  // livello di controller.
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO non_conformita ' +
     '(codice_nc, motivo, stato_nc, data_apertura, azioni_correttive, ' +
     'lotto_materia_prima_id, lotto_semilavorato_id, lotto_prodotto_finito_id) ' +
-    // :stato_nc::stato_nc_enum - cast esplicito necessario: stato_nc e' un
-    // ENUM nativo Postgres (vedi commento di classe su StatoNC), ma FireDAC
-    // lega il parametro come character varying. Senza il cast, Postgres
-    // solleva 'la colonna "stato_nc" e'' di tipo stato_nc_enum ma
-    // l''espressione e'' di tipo character varying' - non e' un problema
-    // di valore (EnsureStatoValido lo ha gia'' validato sopra), e' proprio
-    // il driver che non fa il cast implicito verso un tipo enum custom.
-    // Cast esplicito anche sui tre id di lotto (oltre a stato_nc sopra):
-    // quando il chiamante passa NULL (nessun lotto di quel tipo coinvolto,
-    // vedi LMateriaPrimaParam/LSemilavoratoParam/LProdottoFinitoParam sotto),
-    // FireDAC non ha un valore concreto da cui dedurre il tipo del
-    // parametro e lo lega come testo generico - stesso errore "colonna di
-    // tipo integer ma l''espressione e'' di tipo character varying" gia''
-    // visto per stato_nc, qui pero'' innescato solo quando il valore e''
-    // Null (con un intero valorizzato FireDAC lo lega correttamente).
+    // Cast esplicito :stato_nc::stato_nc_enum: stato_nc e' un ENUM nativo ma FireDAC lega
+    // il parametro come character varying e Postgres non fa il cast implicito. Cast
+    // esplicito anche sui tre id di lotto: se il chiamante passa NULL, FireDAC non puo'
+    // dedurre il tipo e lo lega come testo (errore "colonna di tipo integer ma espressione
+    // character varying"); con un intero valorizzato funziona.
     'VALUES (:codice_nc, :motivo, :stato_nc::stato_nc_enum, :data_apertura, :azioni_correttive, ' +
     ':lotto_materia_prima_id::integer, :lotto_semilavorato_id::integer, ' +
     ':lotto_prodotto_finito_id::integer) ' +
@@ -409,18 +369,13 @@ begin
   if FLottoSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FLottoSemilavoratoID;
   if FLottoProdottoFinitoID = 0 then LProdottoFinitoParam := Null else LProdottoFinitoParam := FLottoProdottoFinitoID;
 
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_non_conformita_aggiornato_il lo valorizza automaticamente.
-  // E' questo il metodo con cui, in pratica, si fa avanzare lo stato
-  // (aperta -> in_gestione -> chiusa) e si compilano le azioni
-  // correttive man mano che la procedura di gestione avanza.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE non_conformita SET codice_nc = :codice_nc, motivo = :motivo, ' +
-    // Stesso cast esplicito di Insert, stesso motivo (vedi commento li').
+    // Stesso cast esplicito di Insert.
     'stato_nc = :stato_nc::stato_nc_enum, data_apertura = :data_apertura, ' +
     'azioni_correttive = :azioni_correttive, ' +
-    // Cast espliciti sui tre id di lotto, stesso motivo di Insert (vedi
-    // commento li'').
+    // Cast espliciti sui tre id di lotto, come in Insert.
     'lotto_materia_prima_id = :lotto_materia_prima_id::integer, ' +
     'lotto_semilavorato_id = :lotto_semilavorato_id::integer, ' +
     'lotto_prodotto_finito_id = :lotto_prodotto_finito_id::integer ' +
@@ -478,8 +433,7 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('codice_nc', LValStr) then
     FCodiceNC := LValStr;
   if AJSON.TryGetValue<string>('motivo', LValStr) then

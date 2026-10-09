@@ -13,62 +13,37 @@ uses
   uModelConsumoProduzioneProdottoFinito;
 
 type
-  // Layer Services per la giacenza di magazzino: e' la "fondamenta"
-  // condivisa da cui dipendono sia lo scenario di ritiro/richiamo (per
-  // sapere quanto di un lotto e' ancora disponibile) sia, in futuro, lo
-  // scenario vendite (per verificare/allocare la giacenza su un ordine).
-  //
-  // Perche' questa logica non sta nei model ne' nei tool MCP: le
-  // operazioni qui sotto attraversano SEMPRE almeno due tabelle (il
-  // lotto componente consumato + la riga di consumo che lo registra), e
-  // in un dominio alimentare devono essere atomiche — non puo' mai
-  // restare scritto un consumo senza il corrispondente scarico di
-  // giacenza, ne' viceversa. I model restano il posto giusto per le
-  // invarianti di UNA singola entita' (vedi TNonConformita.EnsureStatoValido
-  // e simili); questa classe invece orchestra piu' model in un'unica
-  // transazione tramite TDB.ExecuteInTransaction.
-  //
-  // Nota di progetto (transazioni multi-model): TDB.getQueryResult /
-  // executeQuery aprono ciascuno una connessione pooled propria, quindi
-  // due chiamate consecutive a Insert/Update di model diversi NON
-  // condividono una transazione. Per risolverlo, ai model coinvolti qui
-  // (TLottoMateriaPrima, TLottoSemilavorato, TConsumoProduzione*) sono
-  // stati aggiunti metodi/overload che accettano una TFDConnection
-  // gia' aperta, cosi' questa classe puo' passare la STESSA connessione
-  // (ottenuta da TDB.ExecuteInTransaction) a piu' operazioni di scrittura
-  // e farle commit/rollback insieme.
+  // Giacenza di magazzino: base condivisa del richiamo (quanto di un lotto e' ancora
+  // disponibile) e, in futuro, delle vendite (allocare la giacenza su un ordine).
+  // Sta qui e non nei model o nei tool MCP perche' le operazioni toccano sempre due tabelle
+  // (il lotto componente + la riga di consumo) e devono essere atomiche: mai un consumo
+  // senza scarico, ne' viceversa. I model tengono le invarianti di una sola entita'; questa
+  // classe orchestra piu' model in una transazione (TDB.ExecuteInTransaction).
+  // TDB.getQueryResult/executeQuery aprono ciascuno una connessione pooled propria, quindi
+  // due insert di model diversi non condividono una transazione. Per questo
+  // TLottoMateriaPrima, TLottoSemilavorato e TConsumoProduzione* hanno overload che
+  // accettano una TFDConnection gia' aperta: la stessa connessione fa commit/rollback di
+  // tutto.
   TServizioGiacenza = class
   public
-    // --- Ricevimento / produzione -----------------------------------
-    // Applicano la regola di dominio "la giacenza disponibile di un
-    // lotto appena arrivato/prodotto parte uguale alla quantita' totale"
-    // — regola che prima era lasciata a un commento nei model (vedi
-    // Insert di TLottoMateriaPrima/TLottoSemilavorato/TLottoProdottoFinito,
-    // "e' responsabilita' del chiamante impostare QuantitaDisponibile").
-    // Sono operazioni su una singola tabella: non serve una transazione
-    // esplicita, il singolo Insert e' gia' atomico di suo.
+    // Ricevimento e produzione: la giacenza disponibile di un lotto appena arrivato o
+    // prodotto parte uguale alla quantita' totale (prima era un commento nei model).
+    // Singola tabella: il singolo Insert e' gia' atomico.
     class function RegistraRicevimentoMateriaPrima(ALotto: TLottoMateriaPrima): Integer;
     class function RegistraProduzioneSemilavorato(ALotto: TLottoSemilavorato): Integer;
     class function RegistraProduzioneProdottoFinito(ALotto: TLottoProdottoFinito): Integer;
 
-    // --- Giacenza disponibile aggregata -----------------------------
-    // Somma di QuantitaDisponibile su tutti i lotti di un'anagrafica:
-    // "quanto ne ho ancora, in totale, a prescindere dal lotto". Usata
-    // sia dallo scenario di ritiro/richiamo sia dalle interrogazioni di
-    // vendita ad hoc (scenario 2).
+    // Somma di QuantitaDisponibile su tutti i lotti di un'anagrafica: "quanto ne ho in
+    // totale". Usata dal richiamo e dalle interrogazioni vendite.
     class function GiacenzaDisponibileMateriaPrima(AMateriaPrimaID: Integer): Currency;
     class function GiacenzaDisponibileSemilavorato(ASemilavoratoID: Integer): Currency;
     class function GiacenzaDisponibileProdottoFinito(AProdottoFinitoID: Integer): Currency;
 
-    // --- Consumo di produzione (atomico) ----------------------------
-    // Le 4 combinazioni possibili, speculari ai due pattern XOR gia'
-    // presenti nello schema (componente = materia prima o semilavorato;
-    // destinazione = semilavorato o prodotto finito). Ognuna, in
-    // un'unica transazione: decrementa la giacenza del lotto componente
-    // e registra la riga di consumo. Se la giacenza non basta, nessuna
-    // delle due scritture viene applicata (eccezione + rollback
-    // automatico di TDB.ExecuteInTransaction). Restituiscono l'id della
-    // riga di consumo creata.
+    // Consumo di produzione (atomico). Le 4 combinazioni dei due XOR dello schema
+    // (componente = materia prima o semilavorato; destinazione = semilavorato o prodotto
+    // finito). Ognuna, in una transazione, decrementa la giacenza del lotto componente e
+    // registra il consumo. Se la giacenza non basta non si scrive nulla (eccezione +
+    // rollback). Restituiscono l'id del consumo.
     class function ConsumaMateriaPrimaPerSemilavorato(
       ALottoSemilavoratoDestinazioneID, ALottoMateriaPrimaComponenteID: Integer;
       AQuantitaConsumata: Currency): Integer;
@@ -86,8 +61,7 @@ type
 implementation
 
 const
-  // COALESCE a 0: un'anagrafica senza lotti (o con soli lotti esauriti)
-  // deve restituire "zero disponibile", non NULL.
+  // COALESCE a 0: senza lotti (o esauriti) "zero disponibile", non NULL.
   SQL_GIACENZA_MATERIA_PRIMA =
     'SELECT COALESCE(SUM(quantita_disponibile), 0) AS giacenza ' +
     'FROM lotti_materie_prime WHERE materia_prima_id = :materia_prima_id';
@@ -99,8 +73,6 @@ const
   SQL_GIACENZA_PRODOTTO_FINITO =
     'SELECT COALESCE(SUM(quantita_disponibile), 0) AS giacenza ' +
     'FROM lotti_prodotti_finiti WHERE prodotto_finito_id = :prodotto_finito_id';
-
-{ TServizioGiacenza }
 
 class function TServizioGiacenza.RegistraRicevimentoMateriaPrima(
   ALotto: TLottoMateriaPrima): Integer;
@@ -178,10 +150,9 @@ begin
     var
       LConsumo: TConsumoProduzioneSemilavorato;
     begin
-      // Se la giacenza non basta, DecrementaQuantitaDisponibile non
-      // tocca nessuna riga e restituisce False: solleviamo un'eccezione
-      // per far scattare il rollback automatico di ExecuteInTransaction
-      // (nessun consumo viene registrato senza il relativo scarico).
+      // Se la giacenza non basta DecrementaQuantitaDisponibile non tocca nulla e
+      // restituisce False: si solleva un'eccezione per far scattare il rollback, cosi'
+      // nessun consumo resta senza scarico.
       if not TLottoMateriaPrima.DecrementaQuantitaDisponibile(
         ALottoMateriaPrimaComponenteID, AQuantitaConsumata, AConn) then
         raise Exception.CreateFmt(
@@ -211,9 +182,8 @@ var
 begin
   LNuovoID := 0;
 
-  // Distinta base multi-livello: qui il componente consumato e' a sua
-  // volta un lotto di semilavorato (LottoSemilavoratoFiglioID), non una
-  // materia prima. Stessa logica di atomicita' del metodo gemello sopra.
+  // Distinta multi-livello: il componente e' un lotto di semilavorato
+  // (LottoSemilavoratoFiglioID). Stessa atomicita' del metodo sopra.
   TDB.GetInstance.ExecuteInTransaction(
     procedure(AConn: TFDConnection)
     var

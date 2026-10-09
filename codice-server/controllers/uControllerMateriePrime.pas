@@ -13,13 +13,9 @@ uses
   uModelAllergene;
 
 type
-  // Controller CRUD per l'anagrafica materie prime (tabella
-  // anagrafiche_materie_prime), piu' due endpoint dedicati alla gestione
-  // degli allergeni dichiarati (tabella ponte
-  // anagrafiche_materie_prime_allergeni). Questi ultimi sono nidificati
-  // sotto la risorsa /($id)/allergeni perche' rappresentano una relazione
-  // di appartenenza (gli allergeni di QUELLA materia prima), non
-  // un'anagrafica a se stante da esporre come /api/materie-prime-allergeni.
+  // CRUD dell'anagrafica materie prime, piu' due endpoint per gli allergeni dichiarati
+  // (tabella ponte anagrafiche_materie_prime_allergeni), nidificati sotto /($id)/allergeni
+  // perche' sono una relazione di appartenenza, non un'anagrafica a se'.
   [MVCPath('/api/materie-prime')]
   TControllerMateriePrime = class(TMVCController)
   public
@@ -53,8 +49,6 @@ type
   end;
 
 implementation
-
-{ TControllerMateriePrime }
 
 procedure TControllerMateriePrime.GetAll(ctx: TWebContext);
 var
@@ -100,8 +94,7 @@ var
   LMateriaPrima: TMateriaPrima;
   LBody: TJSONObject;
 begin
-  // Vedi commento in TControllerFornitori.Create: BodyAsJSONObject non
-  // esiste in TMVCWebRequest, si usa il parser JSON dell'RTL.
+  // Vedi TControllerFornitori.Create (BodyAsJSONObject).
   LBody := TJSONObject.ParseJSONValue(ctx.Request.Body) as TJSONObject;
   if LBody = nil then
   begin
@@ -114,7 +107,6 @@ begin
     try
       LMateriaPrima.FromJSONObject(LBody);
 
-      // Validazione minima dei campi obbligatori
       if (LMateriaPrima.Codice = '') or (LMateriaPrima.Denominazione = '') then
       begin
         Render(HTTP_STATUS.BadRequest,
@@ -208,10 +200,9 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // TMateriaPrima.Delete solleva un'eccezione se la materia prima e'
-  // referenziata da ordini fornitore, DDT entrata, lotti o righe ricetta
-  // (nessun ON DELETE CASCADE lato DB): la intercettiamo per restituire un
-  // 409 invece di un 500 generico.
+  // TMateriaPrima.Delete solleva un'eccezione se e' referenziata da ordini fornitore, DDT
+  // entrata, lotti o righe ricetta (nessun ON DELETE CASCADE): si restituisce 409 invece di
+  // un 500 generico.
   try
     if TMateriaPrima.Delete(LID) then
       Render(HTTP_STATUS.NoContent, '')
@@ -235,9 +226,8 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // Nessun controllo di esistenza della materia prima: se l'id non esiste
-  // la JOIN nel modello restituisce semplicemente una lista vuota, coerente
-  // con la semantica di "quali sono gli allergeni di questa entita'".
+  // Nessun controllo di esistenza: se l'id non esiste la JOIN da' una lista vuota, coerente
+  // con "gli allergeni di questa entita'".
   LAllergeni := TMateriaPrima.GetAllergeni(LID);
   try
     LArray := TJSONArray.Create;
@@ -260,9 +250,8 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // Payload atteso: un array JSON di id allergene, es. [1, 3, 7].
-  // Non un oggetto con proprieta' perche' la risorsa /allergeni
-  // rappresenta gia' l'intera collezione da sostituire (PUT = replace).
+  // Payload: array JSON di id allergene, es. [1, 3, 7]. E' un PUT = sostituzione
+  // dell'intera collezione.
   LBody := TJSONObject.ParseJSONValue(ctx.Request.Body);
   if not (LBody is TJSONArray) then
   begin
@@ -283,9 +272,8 @@ begin
     except
       on E: Exception do
       begin
-        // Tipicamente una FK violata (allergene_id inesistente): la
-        // transazione in SetAllergeni garantisce che in questo caso non
-        // resti scritto nulla di parziale.
+        // Tipicamente una FK violata (allergene_id inesistente): la transazione in
+        // SetAllergeni non lascia scritture parziali.
         Render(HTTP_STATUS.BadRequest,
           'Uno o piu'' id allergene non sono validi: ' + E.Message);
         Exit;

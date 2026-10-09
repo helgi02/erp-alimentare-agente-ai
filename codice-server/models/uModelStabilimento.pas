@@ -9,13 +9,9 @@ uses
   DbU;
 
 type
-  // Rappresenta uno stabilimento produttivo dell'azienda. E' identificato
-  // nello schema ER dal solo codice CE (codice di riconoscimento
-  // dello stabilimento ai sensi del Reg. CE 853/2004), senza una
-  // denominazione propria: e' il dato che compare in etichetta e nei
-  // documenti di richiamo (scenario "ritiro/richiamo prodotti non
-  // conformi"), quindi va trattato come chiave di business oltre che
-  // come semplice attributo descrittivo.
+  // Stabilimento produttivo, identificato dal solo codice CE (Reg. CE 853/2004). Compare in
+  // etichetta e nei documenti di richiamo, quindi e' una chiave di business oltre che un
+  // attributo.
   TStabilimento = class
   private
     FID: Integer;
@@ -40,12 +36,9 @@ type
     property Cap: string read FCap write FCap;
     property Paese: string read FPaese write FPaese;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_stabilimenti_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TStabilimento;
     class function GetByCodiceCE(const ACodiceCE: string): TStabilimento;
     class function GetAll: TObjectList<TStabilimento>;
@@ -66,8 +59,6 @@ const
     'SELECT id, codice_ce, via, citta, provincia, cap, paese, ' +
     'creato_il, aggiornato_il ' +
     'FROM stabilimenti ';
-
-{ TStabilimento }
 
 constructor TStabilimento.Create;
 begin
@@ -151,10 +142,8 @@ end;
 
 class function TStabilimento.Delete(AID: Integer): Boolean;
 begin
-  // Stabilimento e' referenziato da LOTTI_SEMILAVORATI e
-  // LOTTI_PRODOTTI_FINITI (campo stabilimento_id): in assenza di
-  // ON DELETE CASCADE lato DB, la query fallisce se esistono lotti
-  // prodotti in questo stabilimento. Comportamento voluto.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM stabilimenti WHERE id = :id', [AID]);
 end;
@@ -163,11 +152,8 @@ function TStabilimento.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti:
-  // sono valorizzati dal DEFAULT del database (now()).
-  // codice_ce ha un vincolo UNIQUE (stabilimenti_codice_ce_key): un
-  // eventuale duplicato solleva un'eccezione che va gestita a livello
-  // di controller, come gia' fatto per partita_iva in TFornitore.
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO stabilimenti (codice_ce, via, citta, provincia, cap, paese) ' +
     'VALUES (:codice_ce, :via, :citta, :provincia, :cap, :paese) ' +
@@ -187,10 +173,7 @@ function TStabilimento.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_stabilimenti_aggiornato_il lo valorizza automaticamente.
-  // Lo rileggiamo tramite RETURNING per mantenere l'oggetto coerente
-  // con lo stato effettivo sul database.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE stabilimenti SET codice_ce = :codice_ce, via = :via, citta = :citta, ' +
     'provincia = :provincia, cap = :cap, paese = :paese ' +
@@ -233,8 +216,7 @@ end;
 
 procedure TStabilimento.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id NON viene letto dal payload in ingresso: e' gestito dal database,
-  // mai dal client
+  // id non si legge dal payload: lo gestisce il database.
   if AJSON.TryGetValue<string>('codice_ce', FCodiceCE) then ;
   if AJSON.TryGetValue<string>('via', FVia) then ;
   if AJSON.TryGetValue<string>('citta', FCitta) then ;

@@ -1,40 +1,12 @@
 unit uEsportazioneCSV;
 
-{ ============================================================================
-  TEsportazioneCSV — motore di export CSV generico e parametrico.
-
-  Perche' questa unit esiste: il primo scenario che esporta CSV (vendite,
-  uVenditeToolProvider.CostruisciCSVVendite) costruiva a mano un TStringBuilder
-  con intestazioni ed escaping RFC4180 scritti in linea. Con ritiro/richiamo
-  e ricette in arrivo, ciascuno con la propria "riga di dominio" da esportare,
-  quella logica (join dei campi, escaping, a-capo) andrebbe duplicata identica
-  in ogni tool provider - lo stesso problema che il progetto risolve altrove
-  con "tool MCP generici e parametrici" (vedi documento di progetto), qui
-  applicato all'export invece che ai filtri di interrogazione.
-
-  Design: DUE responsabilita' nettamente separate.
-    1. Le COLONNE (TColonnaCSV<T>): sanno come si chiama una colonna e come
-       estrarre/formattare il suo valore da UNA riga di tipo T (record o
-       classe che sia - T e' generico, un tipo diverso per ogni scenario:
-       TRigaVenditaDettaglio oggi, una futura riga di ritiro/richiamo domani).
-       Formattazione (date, valute, TFormatSettings.Invariant, ...) e' decisa
-       qui, dallo scenario che dichiara le colonne - questa unit non sa e non
-       deve sapere nulla di date o valute.
-    2. Il MOTORE (TEsportazioneCSV.Costruisci<T>): sa SOLO come unire colonne
-       e righe in testo CSV valido (separatore, escaping, a-capo). Non
-       conosce il tipo T ne' il significato dei campi: riceve un array di
-       colonne e un array di righe (il "datasource"), itera l'uno dentro
-       l'altro e produce la stringa finale.
-
-  Cosi' aggiungere un nuovo export (es. ritiro/richiamo) significa dichiarare
-  un array di TColonnaCSV<TRigaRitiro> nel proprio tool provider e chiamare
-  Costruisci<TRigaRitiro> - zero codice di join/escaping da riscrivere.
-
-  Nota di collocazione: vive in services/ (non in tools/) perche' e' logica
-  di servizio riusabile da qualunque tool provider, non un tool MCP essa
-  stessa - stesso principio per cui uServiziVendite.pas sta in services/ e
-  non in tools/.
-  ============================================================================ }
+// Motore di export CSV generico e parametrico (stesso scopo della versione in common).
+// Evita di duplicare in ogni tool provider join dei campi, escaping RFC4180 e a-capo.
+// Le colonne (TColonnaCSV<T>) sanno nome e come estrarre/formattare il valore da una riga T
+// (date e valute sono decise dallo scenario); il motore (TEsportazioneCSV.Costruisci<T>) sa
+// solo unire colonne e righe in CSV valido. Un nuovo export e' un array di
+// TColonnaCSV<TRiga> e una chiamata a Costruisci<TRiga>.
+// Sta in services/ perche' e' logica riusabile da qualunque provider, non un tool MCP.
 
 interface
 
@@ -43,43 +15,27 @@ uses
   System.Classes;
 
 type
-  // Una colonna dell'export: l'intestazione che finisce nella prima riga del
-  // CSV, e la funzione che estrae/formatta il valore di QUESTA colonna da
-  // una riga di dominio di tipo T.
-  //
-  // Perche' un TFunc<T,string> e non solo un nome di campo: il valore da
-  // scrivere richiede quasi sempre una formattazione (data in yyyy-mm-dd,
-  // importo a 2 decimali con punto invariante, ecc.) che varia da colonna a
-  // colonna - tenerla qui, accanto al nome della colonna, evita che chi
-  // aggiunge/riordina colonne debba toccare due punti diversi del codice
-  // (l'intestazione da una parte, il corpo dall'altra).
+  // Una colonna: intestazione e funzione che estrae/formatta il valore da una riga T. Un
+  // TFunc e non un nome di campo perche' il valore richiede quasi sempre una formattazione
+  // propria, tenuta accanto al nome della colonna.
   TColonnaCSV<T> = record
     Intestazione: string;
     Valore: TFunc<T, string>;
     constructor Create(const AIntestazione: string; const AValore: TFunc<T, string>);
   end;
 
-  // Motore di export: dato un insieme di colonne e un datasource (un array
-  // di righe di qualunque tipo T), produce il testo CSV completo
-  // (intestazione + una riga per elemento del datasource).
+  // Dato un insieme di colonne e un array di righe T, produce il CSV completo (intestazione
+  // + una riga per elemento).
   TEsportazioneCSV = class
   private
-    // Escape minimale in stile RFC4180: se il valore contiene il separatore,
-    // virgolette o un a-capo, lo racchiude tra virgolette raddoppiando quelle
-    // gia' presenti. Applicato sia alle intestazioni sia ai valori: una
-    // colonna futura potrebbe avere un'intestazione con caratteri "scomodi"
-    // tanto quanto un valore.
-    //
-    // E' un metodo NON generico a se stante (non una funzione annidata dentro
-    // Costruisci<T>) perche' Delphi non supporta funzioni/procedure locali
-    // annidate dentro un metodo generico (errore del compilatore E2570) - non
-    // dipendendo da T, estrarlo qui e' anche la scelta piu' pulita, non solo
-    // quella che compila.
+    // Escape stile RFC4180: se il valore contiene separatore, virgolette o a-capo, lo
+    // racchiude tra virgolette raddoppiando quelle presenti. Vale anche per le
+    // intestazioni. E' un metodo non generico perche' Delphi non ammette routine locali
+    // annidate in un metodo generico (E2570).
     class function EscapeField(const AValore, ASeparatore: string): string; static;
   public
-    // ASeparatore e' una stringa (non un Char): permette anche separatori
-    // multi-carattere se mai servisse, e rende l'escaping (Pos/StringReplace,
-    // che lavorano su stringhe) piu' diretto senza conversioni implicite.
+    // ASeparatore e' una stringa e non un Char: consente separatori multi-carattere e
+    // semplifica l'escaping.
     class function Costruisci<T>(
       const AColonne: TArray<TColonnaCSV<T>>;
       const ARighe: TArray<T>;
@@ -88,15 +44,11 @@ type
 
 implementation
 
-{ TColonnaCSV<T> }
-
 constructor TColonnaCSV<T>.Create(const AIntestazione: string; const AValore: TFunc<T, string>);
 begin
   Intestazione := AIntestazione;
   Valore := AValore;
 end;
-
-{ TEsportazioneCSV }
 
 class function TEsportazioneCSV.EscapeField(const AValore, ASeparatore: string): string;
 begin
@@ -118,8 +70,7 @@ var
 begin
   LSB := TStringBuilder.Create;
   try
-    // Riga di intestazione: una colonna per elemento di AColonne, nello
-    // stesso ordine in cui e' stato dichiarato dal chiamante.
+    // Intestazione: una colonna per elemento, nell'ordine dichiarato.
     for I := 0 to High(AColonne) do
     begin
       if I > 0 then
@@ -128,10 +79,8 @@ begin
     end;
     LSB.AppendLine;
 
-    // Una riga per elemento del datasource: per ogni riga, richiama il
-    // formattatore di OGNI colonna nello stesso ordine dell'intestazione -
-    // e' questo doppio ciclo (righe x colonne) l'unica parte "meccanica"
-    // che il motore generico risparmia di riscrivere ad ogni scenario.
+    // Una riga per elemento: per ognuna, il formattatore di ogni colonna nello stesso
+    // ordine dell'intestazione.
     for LRiga in ARighe do
     begin
       for I := 0 to High(AColonne) do

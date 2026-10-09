@@ -29,20 +29,16 @@ type
   TOpzioniTurno = record
     ModalitaOverride: string;
     ModelloOverride: string;
-    // Solo batteria di test: 'ciclo' o 'pianificatore' per questo turno,
-    // al posto di [Orchestratore] Motore dell'ini.
+    // Solo test: forza il motore ('ciclo' o 'pianificatore') per questo turno.
     MotoreOverride: string;
-    // Solo batteria di test: da quale run, caso e ripetizione arriva il
-    // turno. Il server non li usa: li riporta nei file di diagnostica, cosi'
-    // ogni riga del registro si aggancia alla riga dei risultati dello script.
+    // Solo test: run, caso e ripetizione di provenienza; il server li riporta nei file di
+    // diagnostica.
     TestRun: string;
     TestCaso: string;
     TestRipetizione: string;
     ProfiloLLM: string;
-    // Solo motore "pianificatore": risposta alla richiesta di conferma data
-    // con i pulsanti della chat ('conferma' o 'annulla'; '' = l'utente ha
-    // scritto del testo). Con il pulsante la scelta e' gia' certa, quindi
-    // TTurnoPianificato.PassoConferma non chiama il modello per leggerla.
+    // Motore pianificatore: scelta data con i pulsanti ('conferma'/'annulla'; '' = testo
+    // libero), senza chiamare il modello.
     SceltaConferma: string;
   end;
 
@@ -97,9 +93,8 @@ type
     Iterazioni: Integer;
     LimiteRaggiunto: Boolean;
     Diagnostica: TDiagnosticaTurno;
-    // Solo motore "pianificatore": stato in cui resta il turno (concluso,
-    // in_attesa_conferma, in_attesa_scelta) e dettaglio di cio' che e'
-    // successo (piano, candidati, errori, esiti). Di proprieta' dell'esito.
+    // Motore pianificatore: stato del turno (concluso, in_attesa_conferma,
+    // in_attesa_scelta) e dettagli.
     StatoTurno: string;
     DatiPianificatore: TJSONObject;
     constructor Create;
@@ -114,41 +109,23 @@ type
     Tools: TJSONArray;
     ToolsProprietario: Boolean;
     Opzioni: TOpzioniTurno;
-    // Identita' del turno nel protocollo con il client (vedi
-    // TArchivioTurniAttivi e docs/protocollo_turni_client_llm.md):
-    //   TurnoID      GUID generato alla creazione: e' la chiave con cui il
-    //                server riconosce il turno. Serve perche' NumeroTurno
-    //                da solo non e' univoco: un turno abbandonato non viene
-    //                salvato nello storico, quindi il turno successivo
-    //                riceverebbe lo stesso numero e una risposta in ritardo
-    //                del vecchio turno verrebbe scambiata per quella nuova.
-    //   NumeroTurno  progressivo leggibile (1, 2, 3...) delle domande
-    //                dell'utente nella conversazione: per log, CSV e
-    //                interfaccia, non per la validazione.
-    //   Passo        numero della richiesta al modello DENTRO il turno
-    //                (1 = prima richiesta, poi +1 dopo ogni risposta
-    //                elaborata). Il client deve rimandare lo stesso numero
-    //                che ha ricevuto: cosi' un doppio invio o un retry di
-    //                rete non fa eseguire due volte gli stessi tool.
+    // TurnoID: GUID che identifica il turno (NumeroTurno da solo non e' univoco).
+    // NumeroTurno: progressivo delle domande, per log e interfaccia.
+    // Passo: numero della richiesta al modello nel turno; il client lo rimanda per evitare
+    // doppie esecuzioni.
     TurnoID: string;
     NumeroTurno: Integer;
     Passo: Integer;
-    // Ultima volta che il turno e' stato toccato: per scartare i turni che
-    // il client ha abbandonato (pagina chiusa, LLM locale spento...).
+    // Ultimo accesso al turno: serve a scartare i turni abbandonati.
     UltimoAccesso: TDateTime;
-    // Quante tracce di Esito.Tracce sono gia' state consegnate al client.
-    // Ogni risposta del protocollo porta solo quelle nuove
-    // ("tool_calls_passo"), cosi' la chat puo' mostrare i tool man mano
-    // che vengono eseguiti invece che tutti insieme a fine turno.
+    // Tracce di Esito.Tracce gia' consegnate al client: ogni risposta porta solo le nuove.
     TracceConsegnate: Integer;
     Fase: TFaseTurno;
     Iterazione: Integer;
     CronometroTotale: TStopwatch;
     Esito: TEsitoConversazione;
-    // nil con il motore "ciclo". Con il motore "pianificatore" e' il
-    // TTurnoPianificato (uTurnoPianificato.pas) che guida il turno; il
-    // tipo e' TObject per non far dipendere questa unit da quella. Di
-    // proprieta' dello stato.
+    // nil con il motore 'ciclo'; con 'pianificatore' e' il TTurnoPianificato (TObject per
+    // non dipendere da quella unit). Di proprieta' dello stato.
     Pianificatore: TObject;
     destructor Destroy; override;
   end;
@@ -177,82 +154,62 @@ type
     class constructor Create;
     class destructor Destroy;
   public
-    // Il turno avanza a passi, e a ogni passo e' il SERVER a chiamare il
-    // modello (TClientLLM, configurazione unica in [LLM] dell'ini). Il
-    // client si limita a chiedere "fai il passo successivo" e a mostrare la
-    // fase: non vede mai richieste o risposte del modello.
-    //   CreaStatoTurno -> [EseguiPassoLLM]* -> ConsegnaEsitoTurno
-    // dove EseguiPassoLLM = PreparaRichiestaLLM -> TClientLLM.Completa ->
-    // ValidaRispostaLLM -> ElaboraRispostaLLM.
-    // Fra un passo e l'altro lo stato vive in TArchivioTurniAttivi.
+    // Il turno avanza a passi e a ogni passo e' il server a chiamare il modello
+    // (TClientLLM).
+    // CreaStatoTurno -> [EseguiPassoLLM]* -> ConsegnaEsitoTurno
+    // Tra un passo e l'altro lo stato resta in TArchivioTurniAttivi.
     class function CreaStatoTurno(const AConversationID, AMessaggioUtente: string;
       const AOpzioni: TOpzioniTurno): TStatoTurno;
-    // Richiesta per il modello (formato interno chat/completions), da liberare.
+    // Richiesta per il modello (formato chat/completions), da liberare.
     class function PreparaRichiestaLLM(AStato: TStatoTurno): TJSONObject;
-    // Controllo di forma della risposta del modello PRIMA di toccare lo
-    // stato: un modello piccolo puo' produrre tool_calls incomplete.
+    // Controlla la forma della risposta prima di toccare lo stato (le tool_calls possono
+    // essere incomplete).
     class function ValidaRispostaLLM(ARisposta: TJSONObject; out AMotivo: string): Boolean;
     class function ElaboraRispostaLLM(AStato: TStatoTurno; ARisposta: TJSONObject;
       ADurataMs: Int64): Boolean;
-    // Un passo completo: chiama il modello ed elabora la sua risposta
-    // (eseguendo i tool richiesti). True = turno concluso. Solleva
-    // ELLMErrore (uClientLLM) se il motore di inferenza non risponde.
+    // Un passo: chiama il modello ed elabora la risposta. True = turno concluso. Solleva
+    // ELLMErrore se il modello non risponde.
     class function EseguiPassoLLM(AStato: TStatoTurno): Boolean;
-    // Frase che descrive all'utente cosa fara' il PROSSIMO passo (es. "Il
-    // modello sta leggendo i dati"): la decide il server, cosi' il client
-    // la mostra senza dover interpretare nulla.
+    // Frase mostrata all'utente sul prossimo passo (es. "Il modello sta leggendo i dati").
     class function DescriviFase(AStato: TStatoTurno): string;
     class function ConsegnaEsitoTurno(AStato: TStatoTurno): TEsitoConversazione;
-    // Token e durata di una chiamata al modello nella diagnostica del turno.
-    // Pubblica perche' la usa anche il motore "pianificatore".
+    // Registra token e durata di una chiamata al modello nella diagnostica.
     class procedure RegistraTokenChiamataLLM(ADiagnostica: TDiagnosticaTurno;
       AIterazione: Integer; ARisposta: TJSONObject; ADurataMs: Int64);
-    // True se questo turno va gestito dal motore "pianificatore": override
-    // della batteria di test se presente, altrimenti [Orchestratore] Motore.
+    // True se il turno va al motore pianificatore (override di test, altrimenti
+    // [Orchestratore] Motore).
     class function MotorePianificatore(const AOpzioni: TOpzioniTurno): Boolean;
   end;
 
-  // Esito di TArchivioTurniAttivi.Preleva, tradotto dal controller in uno
-  // status HTTP (404 turno sconosciuto/scaduto, 409 turno superato o passo
-  // non atteso o gia' in elaborazione).
+  // Esito di Preleva, tradotto dal controller in status HTTP (404 sconosciuto/scaduto, 409
+  // superato o gia' in elaborazione).
   TEsitoPrelievo = (epOk, epSconosciuto, epSuperato, epPassoErrato, epInElaborazione);
 
-  // Turni in corso, uno per conversazione, fra una risposta del client e la
-  // successiva. Prima tutto il turno viveva nello stack di una sola richiesta
-  // HTTP; ora dura piu' richieste, quindi lo stato va parcheggiato qui.
-  //
-  // Schema "preleva / rimetti": chi elabora un passo PRELEVA lo stato (che
-  // resta segnato come in elaborazione) e lo RIMETTE a fine passo. Il lock
-  // globale e' tenuto solo per le operazioni sul dizionario, mai durante
-  // l'esecuzione dei tool: due conversazioni diverse avanzano in parallelo,
-  // mentre due richieste sullo stesso turno si escludono a vicenda (la
-  // seconda riceve epInElaborazione).
+  // Turni in corso, uno per conversazione, tra una risposta del client e la successiva.
+  // Chi elabora un passo PRELEVA lo stato e lo RIMETTE alla fine. Il lock protegge solo il
+  // dizionario, non l'esecuzione dei tool: conversazioni diverse vanno in parallelo, due
+  // richieste sullo stesso turno si escludono.
   TArchivioTurniAttivi = class
   private
     class var FLock: TCriticalSection;
     // conversation_id -> stato del turno (nil = prelevato, in elaborazione)
     class var FTurni: TObjectDictionary<string, TStatoTurno>;
-    // conversation_id -> turno_id del turno CORRENTE. Separato da FTurni
-    // perche' deve esistere anche mentre lo stato e' prelevato: e' cio' che
-    // permette di accorgersi che nel frattempo e' partito un turno nuovo.
+    // conversation_id -> turno_id corrente. Esiste anche mentre lo stato e' prelevato, per
+    // accorgersi di un turno nuovo.
     class var FTurnoCorrente: TDictionary<string, string>;
     class procedure RimuoviScaduti;
   public
     class constructor Create;
     class destructor Destroy;
-    // Registra un turno appena creato come turno corrente della sua
-    // conversazione. Un turno precedente ancora aperto viene abbandonato:
-    // se il client riparte con una nuova domanda, quella vecchia non
-    // interessa piu' a nessuno.
+    // Registra il turno come corrente della conversazione; un turno precedente ancora
+    // aperto viene abbandonato.
     class procedure Registra(AStato: TStatoTurno);
     class function Preleva(const AConversationID, ATurnoID: string; APasso: Integer;
       out AStato: TStatoTurno): TEsitoPrelievo;
-    // Rimette lo stato dopo un passo. Se nel frattempo e' partito un turno
-    // nuovo, questo e' superato: viene liberato e il risultato e' False.
+    // Rimette lo stato dopo un passo. False se nel frattempo e' partito un turno nuovo
+    // (stato liberato).
     class function Rimetti(AStato: TStatoTurno): Boolean;
-    // Chiude il turno (concluso o annullato) togliendolo dall'archivio. Se
-    // era parcheggiato lo stato viene liberato qui; se era prelevato resta
-    // a carico di chi lo ha prelevato. True = era ancora il turno corrente.
+    // Chiude il turno togliendolo dall'archivio. True = era ancora il turno corrente.
     class function Chiudi(const AConversationID, ATurnoID: string): Boolean;
   end;
 
@@ -325,14 +282,11 @@ const
 
   TTL_CONVERSAZIONE_MINUTI = 60;
 
-  // Tempo massimo di attesa fra due passi dello stesso turno (pagina chiusa
-  // a meta' turno). Largo perche' un passo comprende la risposta del
-  // modello: un 9B su CPU puo' metterci minuti per una sola richiesta.
+  // Attesa massima tra due passi dello stesso turno. Larga: un passo include la risposta
+  // del modello, che su CPU puo' durare minuti.
   TTL_TURNO_ATTIVO_MINUTI = 15;
 
   MAX_TURNI_FINESTRA = 6;
-
-{ TTracciaTool }
 
 function TTracciaTool.ToJSONObject: TJSONObject;
 var
@@ -356,8 +310,6 @@ begin
   Result.AddPair('duration_ms', TJSONNumber.Create(DurataMs));
   Result.AddPair('ok', TJSONBool.Create(Riuscita));
 end;
-
-{ TDiagnosticaTurno }
 
 constructor TDiagnosticaTurno.Create;
 begin
@@ -495,8 +447,6 @@ begin
   Result.AddPair('chiamate_llm', LArrayChiamate);
 end;
 
-{ TEsitoConversazione }
-
 constructor TEsitoConversazione.Create;
 begin
   inherited;
@@ -512,12 +462,9 @@ begin
   inherited;
 end;
 
-{ TStatoTurno }
-
 destructor TStatoTurno.Destroy;
 begin
-  // Prima dell'esito: il turno pianificato non possiede nulla dell'esito,
-  // ma va liberato per primo perche' puo' riferirsi allo stato.
+  // Libera prima il turno pianificato: puo' riferirsi allo stato.
   Pianificatore.Free;
   Messaggi.Free;
   if ToolsProprietario then
@@ -525,8 +472,6 @@ begin
   Esito.Free;
   inherited;
 end;
-
-{ TArchivioTurniAttivi }
 
 class constructor TArchivioTurniAttivi.Create;
 begin
@@ -542,8 +487,8 @@ begin
   FLock.Free;
 end;
 
-// Chiamata con il lock gia' preso. Scarta solo i turni PARCHEGGIATI da
-// troppo tempo: uno prelevato (valore nil) e' in elaborazione e non scade.
+// Chiamata con il lock preso. Scarta solo i turni parcheggiati da troppo tempo (quelli
+// prelevati non scadono).
 class procedure TArchivioTurniAttivi.RimuoviScaduti;
 var
   LScaduti: TArray<string>;
@@ -576,9 +521,7 @@ begin
       TLog.Write('AGENTE - nuovo turno su [' + LID + ']: il turno ' +
         FTurnoCorrente[LID] + ' viene abbandonato');
     AStato.UltimoAccesso := Now;
-    // AddOrSetValue libera l'eventuale stato vecchio (doOwnsValues). Se il
-    // vecchio era prelevato (nil) lo liberera' Rimetti, accorgendosi di
-    // essere stato superato.
+    // AddOrSetValue libera il vecchio stato; se era prelevato (nil) lo libera Rimetti.
     FTurni.AddOrSetValue(LID, AStato);
     FTurnoCorrente.AddOrSetValue(LID, AStato.TurnoID);
   finally
@@ -608,8 +551,8 @@ begin
     if LStato.Passo <> APasso then
       Exit(epPassoErrato);
 
-    // Estrae l'oggetto senza liberarlo e lascia la chiave con valore nil:
-    // la conversazione risulta "in elaborazione" finche' non si rimette.
+    // Estrae l'oggetto senza liberarlo e lascia nil: la conversazione risulta "in
+    // elaborazione".
     AStato := FTurni.ExtractPair(AConversationID).Value;
     FTurni.Add(AConversationID, nil);
     Result := epOk;
@@ -649,8 +592,7 @@ begin
       (LCorrente = ATurnoID);
     if Result then
     begin
-      // Remove libera lo stato se era parcheggiato; se era prelevato il
-      // valore e' nil e lo stato resta al chiamante.
+      // Remove libera lo stato se era parcheggiato; se prelevato (nil) resta a chi lo ha.
       FTurni.Remove(AConversationID);
       FTurnoCorrente.Remove(AConversationID);
     end;
@@ -658,8 +600,6 @@ begin
     FLock.Release;
   end;
 end;
-
-{ TArchivioConversazioni }
 
 class constructor TArchivioConversazioni.Create;
 begin
@@ -733,8 +673,6 @@ begin
     FLock.Release;
   end;
 end;
-
-{ TServizioAgente }
 
 // Prompt di sistema: regole generali dell'agente + elenco dei provider disponibili.
 class function TServizioAgente.CreaPromptDiSistema: string;
@@ -1363,9 +1301,7 @@ begin
         .AddPair('content', CreaPromptDiSistema));
     end;
 
-    // Modello configurato in ini ([LLM] ChatModel), passato dal controller
-    // solo per la diagnostica. Il nome effettivo arriva comunque nel campo
-    // "model" di ogni risposta (vedi RegistraTokenChiamataLLM).
+    // Modello configurato in ini ([LLM] ChatModel), solo per la diagnostica.
     Result.Esito.Diagnostica.ProfiloLLM := AOpzioni.ProfiloLLM;
 
     LMessaggioUtente := TJSONObject.Create;
@@ -1378,10 +1314,8 @@ begin
     Result.Esito.Diagnostica.ConversationID := Result.Esito.ConversationID;
     Result.Esito.Diagnostica.Domanda := AMessaggioUtente;
 
-    // MOTORE "PIANIFICATORE": il turno resta questo (stesso stato, stesso
-    // protocollo a passi, stessa diagnostica) ma a guidarlo e'
-    // TTurnoPianificato. Niente selezione dei tool sulla domanda: i tool
-    // si cercano dopo, per ogni azione del piano.
+    // Motore pianificatore: stesso stato, protocollo e diagnostica, ma il turno lo guida
+    // TTurnoPianificato. I tool si cercano per ogni azione del piano.
     if MotorePianificatore(AOpzioni) then
     begin
       Result.Esito.Diagnostica.Modalita := 'pianificatore';
@@ -1409,16 +1343,9 @@ begin
   end;
 end;
 
-// Richiesta per il modello, nel formato interno chat/completions (vedi
-// docs/protocollo_turni_client_llm.md). TClientLLM (uClientLLM.pas) la
-// invia al motore quasi cosi' com'e'.
-//   messages       finestra degli ultimi turni (UltimiMessaggi)
-//   tools          definizioni dei tool selezionati nella fase 1
-//   consenti_tool  false nel "paracadute" di fine ciclo: il modello deve
-//                  rispondere a parole. Tenuto distinto dall'assenza di
-//                  tools perche' Anthropic vuole i tool dichiarati se lo
-//                  storico contiene tool_use (li manda con tool_choice none).
-//   modello        solo batteria di test (override del nome del modello).
+// Richiesta per il modello (formato chat/completions).
+// messages: ultimi turni; tools: tool selezionati; consenti_tool: false per la risposta
+// finale a parole; modello: override di test.
 class function TServizioAgente.PreparaRichiestaLLM(AStato: TStatoTurno): TJSONObject;
 begin
   if AStato.Fase = ftConcluso then
@@ -1427,9 +1354,8 @@ begin
   Result := TJSONObject.Create;
   try
     Result.AddPair('messages', UltimiMessaggi(AStato.Messaggi));
-    // Clone: AStato.Tools puo' appartenere al catalogo condiviso
-    // (ToolsProprietario = False) e non deve finire dentro la risposta HTTP,
-    // che viene liberata dal framework dopo l'invio.
+    // Clone: Tools puo' appartenere al catalogo condiviso e non deve finire nella risposta
+    // HTTP, che il framework libera.
     Result.AddPair('tools', AStato.Tools.Clone as TJSONArray);
     Result.AddPair('consenti_tool', TJSONBool.Create(AStato.Fase = ftCiclo));
     if AStato.Opzioni.ModelloOverride <> '' then
@@ -1440,10 +1366,8 @@ begin
   end;
 end;
 
-// Se ne controlla la forma prima di eseguire qualunque tool: un modello
-// piccolo puo' produrre tool_calls incomplete. Il minimo che
-// ElaboraRispostaLLM da' per scontato: choices[0].message e, per ogni
-// tool_call, id + function.name + function.arguments.
+// Controllo di forma prima di eseguire qualunque tool. Minimo richiesto: choices[0].message
+// e, per ogni tool_call, id + function.name + function.arguments.
 class function TServizioAgente.ValidaRispostaLLM(ARisposta: TJSONObject;
   out AMotivo: string): Boolean;
 var
@@ -1504,13 +1428,10 @@ begin
   Result := True;
 end;
 
-// Un passo del turno, tutto lato server:
-//   1. prepara la richiesta (finestra dei messaggi + tool della fase 1);
-//   2. la manda al motore di inferenza configurato in ini (TClientLLM);
-//   3. controlla la forma della risposta;
-//   4. la elabora: esegue i tool richiesti oppure registra la risposta finale.
-// Se il motore non risponde (punto 2) o risponde male (punto 3) si solleva
-// ELLMErrore PRIMA di aver eseguito qualunque tool di questo passo.
+// Un passo del turno, lato server: prepara la richiesta, chiama il modello, controlla la
+// risposta, poi esegue i tool o registra la risposta finale.
+// Se il modello non risponde o risponde male si solleva ELLMErrore prima di eseguire
+// qualunque tool.
 class function TServizioAgente.EseguiPassoLLM(AStato: TStatoTurno): Boolean;
 var
   LRichiesta, LRisposta: TJSONObject;
@@ -1531,8 +1452,7 @@ begin
   try
     if not ValidaRispostaLLM(LRisposta, LMotivo) then
       raise ELLMErrore.Create('Risposta del modello non valida: ' + LMotivo);
-    // ElaboraRispostaLLM clona cio' che conserva nello storico: la risposta
-    // resta nostra e si libera qui.
+    // ElaboraRispostaLLM clona cio' che conserva nello storico: la risposta si libera qui.
     Result := ElaboraRispostaLLM(AStato, LRisposta, LDurataMs);
   finally
     LRisposta.Free;
@@ -1687,8 +1607,7 @@ begin
   LArgomenti := nil;
   LNomeTool := '';
 
-  // "is TJSONArray" e non "<> nil": alcuni motori mandano "tool_calls": null
-  // quando il modello risponde a parole (ValidaRispostaLLM lo ammette).
+  // "is TJSONArray" e non "<> nil": alcuni motori mandano "tool_calls": null.
   if LMessaggio.GetValue('tool_calls') is TJSONArray then
     LToolCalls := TJSONArray(LMessaggio.GetValue('tool_calls'))
   else if EstraiToolCallDalTesto(LContenuto, LNomeTool, LArgomenti) then
@@ -1832,8 +1751,7 @@ begin
   AStato.Esito.Diagnostica.DurataTotaleMs := AStato.CronometroTotale.ElapsedMilliseconds;
   ScriviCsvSelezioneTool(AStato.Esito.Diagnostica);
 
-  // Motore "pianificatore": lo storico e' quello dei turni (piano, esiti,
-  // stato), non l'elenco dei messaggi chat.
+  // Motore pianificatore: lo storico contiene piano, esiti e stato, non i messaggi chat.
   if AStato.Pianificatore <> nil then
     TTurnoPianificato.Consegna(AStato)
   else

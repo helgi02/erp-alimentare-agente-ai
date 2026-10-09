@@ -9,10 +9,8 @@ uses
   DbU;
 
 type
-  // Rappresenta un allergene di riferimento (Reg. UE 1169/2011, Allegato II).
-  // Tabella anagrafica di riferimento normativo (es. GLUT, LAT, UOV),
-  // popolata perlopiu' una tantum ma dotata comunque dei consueti campi
-  // di audit gestiti dal database (default + trigger aggiorna_timestamp).
+  // Allergene di riferimento (Reg. UE 1169/2011, Allegato II), es. GLUT, LAT, UOV. Tabella
+  // anagrafica normativa, con i consueti campi di audit gestiti dal database.
   TAllergene = class
   private
     FID: Integer;
@@ -29,12 +27,9 @@ type
     property Codice: string read FCodice write FCodice;
     property Denominazione: string read FDenominazione write FDenominazione;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_allergeni_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TAllergene;
     class function GetByCodice(const ACodice: string): TAllergene;
     class function GetAll: TObjectList<TAllergene>;
@@ -46,15 +41,10 @@ type
     function ToJSONObject: TJSONObject;
     procedure FromJSONObject(AJSON: TJSONObject);
 
-    // Logica condivisa per le tabelle ponte many-to-many con le
-    // anagrafiche (anagrafiche_materie_prime_allergeni,
-    // anagrafiche_semilavorati_allergeni,
-    // anagrafiche_prodotti_finiti_allergeni). Sono strutturalmente
-    // identiche: due sole FK, PK composta, nessun campo proprio, nessun
-    // audit. Anziche' triplicare la stessa logica su tre classi, ogni
-    // anagrafica (TMateriaPrima, TSemilavorato, TProdottoFinito) espone
-    // un wrapper sottile che delega qui, passando il nome della tabella
-    // ponte e della colonna FK che la identifica.
+    // Logica condivisa per le tre tabelle ponte con le anagrafiche (materie prime,
+    // semilavorati, prodotti finiti), identiche: due FK, PK composta, nessun audit. Ogni
+    // anagrafica espone un wrapper sottile che delega qui con nome della tabella ponte e
+    // della colonna FK.
     class function GetPerEntita(const ATabellaPonte, AColonnaFK: string;
       AEntitaID: Integer): TObjectList<TAllergene>;
     class procedure SetPerEntita(const ATabellaPonte, AColonnaFK: string;
@@ -68,8 +58,6 @@ const
   SQL_SELECT_BASE =
     'SELECT id, codice, denominazione, creato_il, aggiornato_il ' +
     'FROM allergeni ';
-
-{ TAllergene }
 
 constructor TAllergene.Create;
 begin
@@ -109,10 +97,8 @@ class function TAllergene.GetByCodice(const ACodice: string): TAllergene;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // Utile perche' i tool MCP che verificano la conformita' delle etichette
-  // (scenario "adattamento ricette") ragionano piu' naturalmente per codice
-  // allergene (es. GLUT) che per id numerico interno. codice ha un vincolo
-  // UNIQUE (allergeni_codice_key), quindi la ricerca e' univoca.
+  // Ricerca per codice (es. GLUT): i tool MCP sulle etichette ragionano per codice, non per
+  // id. Il codice e' UNIQUE (allergeni_codice_key), quindi la ricerca e' univoca.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -152,12 +138,8 @@ end;
 
 class function TAllergene.Delete(AID: Integer): Boolean;
 begin
-  // Nota: allergeni e' referenziato dalle tabelle ponte
-  // *_allergeni (materie prime, semilavorati, prodotti finiti).
-  // Se il DB ha vincoli FK senza ON DELETE CASCADE, questa query
-  // sollevera' un'eccezione in presenza di associazioni esistenti:
-  // comportamento voluto, per evitare cancellazioni accidentali di
-  // un allergene ancora in uso.
+  // Allergene referenziato dalle tabelle ponte: senza ON DELETE CASCADE la query fallisce
+  // se e' in uso. Voluto, per evitare cancellazioni accidentali.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM allergeni WHERE id = :id', [AID]);
 end;
@@ -166,11 +148,8 @@ function TAllergene.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti:
-  // sono valorizzati dal DEFAULT del database (now()).
-  // codice ha un vincolo UNIQUE (allergeni_codice_key): un eventuale
-  // duplicato solleva un'eccezione da gestire a livello di controller,
-  // come gia' fatto per partita_iva in TFornitore.
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO allergeni (codice, denominazione) ' +
     'VALUES (:codice, :denominazione) ' +
@@ -190,8 +169,7 @@ function TAllergene.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_allergeni_aggiornato_il lo valorizza automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE allergeni SET codice = :codice, denominazione = :denominazione ' +
     'WHERE id = :id ' +
@@ -229,8 +207,7 @@ end;
 
 procedure TAllergene.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in ingresso:
-  // sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('codice', FCodice) then ;
   if AJSON.TryGetValue<string>('denominazione', FDenominazione) then ;
 end;
@@ -244,10 +221,8 @@ var
 begin
   Result := TObjectList<TAllergene>.Create(True); // possiede gli oggetti
 
-  // JOIN parametrica sul nome tabella/colonna: ATabellaPonte e AColonnaFK
-  // sono valori letterali decisi dal codice chiamante (mai dall'utente
-  // finale o dal modello via JSON), quindi non c'e' rischio di SQL
-  // injection nel comporli con Format/concatenazione.
+  // JOIN parametrica: ATabellaPonte e AColonnaFK sono letterali decisi dal codice
+  // chiamante, mai dall'utente o dal modello, quindi nessun rischio di SQL injection.
   LSql := Format(
     'SELECT a.id, a.codice, a.denominazione, a.creato_il, a.aggiornato_il ' +
     'FROM allergeni a ' +
@@ -277,15 +252,10 @@ var
   LParamsList: TArray<TArray<Variant>>;
   i: Integer;
 begin
-  // Sostituzione atomica dell'insieme di allergeni: un DELETE di tutte le
-  // associazioni esistenti seguito da un INSERT per ciascun allergene
-  // richiesto, il tutto in un'unica transazione (TDB.ExecuteQueriesInTransaction).
-  // Senza transazione, un errore a meta' sequenza (es. un allergene_id
-  // inesistente) lascerebbe l'entita' con un sottoinsieme parziale e
-  // silenzioso di allergeni dichiarati: inaccettabile per un dato di
-  // etichettatura (Reg. UE 1169/2011). Con la transazione, o l'intero
-  // nuovo insieme viene scritto, o non cambia nulla e l'eccezione risale
-  // al chiamante (es. il tool MCP che ha invocato questa procedure).
+  // Sostituzione atomica in una transazione (DELETE + INSERT per ogni allergene). Senza, un
+  // errore a meta' (es. allergene_id inesistente) lascerebbe un sottoinsieme parziale e
+  // silenzioso di allergeni dichiarati: inaccettabile per l'etichettatura. Con la
+  // transazione si scrive tutto o non cambia nulla.
   SetLength(LQueries, Length(AAllergeneIDs) + 1);
   SetLength(LParamsList, Length(AAllergeneIDs) + 1);
 

@@ -35,7 +35,7 @@ type
   private
     FConnection: TFDConnection;
     FQuery: TFDQuery;
-    FOwnsConnection: Boolean; // se True, la connessione va rilasciata tramite TDB
+    FOwnsConnection: Boolean;
   public
     constructor Create(AConnection: TFDConnection; AOwnsConnection: Boolean = True);
     destructor Destroy; override;
@@ -63,34 +63,25 @@ type
     constructor Create; reintroduce;
     destructor Destroy; override;
 
-    // Rilascio connessione (usato sia dalla logica app che da TAutoQuery)
+    // Rilascio connessione (da logica applicativa e da TAutoQuery).
     procedure ReleasePooledConnection(var AConnection: TFDConnection);
 
-    // Metodi per query con gestione automatica
     function getQueryResult(aQuery: String): TAutoQuery; overload;
     function getQueryResult(aQuery: String; Params: array of Variant): TAutoQuery; overload;
     function executeQuery(aQuery: String): Boolean; overload;
     function executeQuery(aQuery: String; Params: array of Variant): Boolean; overload;
 
-    // Helper per transazioni thread-safe
     procedure ExecuteInTransaction(AProc: TProc<TFDConnection>);
 
-    // Esegue piu' query (DELETE/INSERT/UPDATE, senza ResultSet atteso)
-    // in un'unica transazione: o vanno tutte a buon fine, o nessuna
-    // modifica resta sul DB (rollback automatico se una qualsiasi
-    // solleva un'eccezione). AQueries[i] usa i parametri posizionali
-    // AParamsList[i], con la stessa sintassi :nome_param delle altre
-    // query parametriche di questa classe.
-    // Pensato per operazioni che devono essere atomiche ma non
-    // restituiscono dati (es. sostituire un insieme di associazioni
-    // many-to-many, come gli allergeni collegati a una materia prima).
+    // Esegue piu' query (DELETE/INSERT/UPDATE senza ResultSet) in un'unica transazione:
+    // tutte o nessuna (rollback se una solleva). AQueries[i] usa i parametri posizionali
+    // AParamsList[i], con la sintassi :nome_param. Per operazioni atomiche senza dati di
+    // ritorno (es. sostituire le associazioni many-to-many degli allergeni).
     procedure ExecuteQueriesInTransaction(const AQueries: TArray<string>;
       const AParamsList: TArray<TArray<Variant>>);
   end;
 
 implementation
-
-{ TAutoQuery }
 
 constructor TAutoQuery.Create(AConnection: TFDConnection; AOwnsConnection: Boolean);
 begin
@@ -129,8 +120,6 @@ begin
 
   inherited;
 end;
-
-{ TDB ------------------------------------------------------------ }
 
 class constructor TDB.Create;
 begin
@@ -177,7 +166,7 @@ procedure TDB.InitializeConnectionDef;
 var
   Params: TStrings;
 begin
-  // Evita di registrare più volte la stessa ConnectionDef
+  // Evita di registrare piu' volte la stessa ConnectionDef.
   if FDManager.ConnectionDefs.FindConnectionDef(DB_POOL_NAME) <> nil then
     Exit;
 
@@ -190,11 +179,10 @@ begin
     Params.Add('User_Name=' + FConfig.UserName);
     Params.Add('Password=' + FConfig.Password);
 
-    // Pooling FireDAC
     Params.Add('Pooled=True');
     Params.Add('POOL_MaximumItems=' + FConfig.PoolSize.ToString);
-    Params.Add('POOL_ExpireTimeout=90000');   // 90 secondi
-    Params.Add('POOL_CleanupTimeout=30000');  // 30 secondi
+    Params.Add('POOL_ExpireTimeout=90000');
+    Params.Add('POOL_CleanupTimeout=30000');
 
     FDManager.AddConnectionDef(DB_POOL_NAME, 'PG', Params);
     Tlog.write('Connection pool configurato con successo (max ' +
@@ -330,20 +318,12 @@ begin
       Result.Query.SQL.Text := aQuery;
       for i := 0 to High(Params) do
       begin
-        // Parametro Null "puro" (es. un campo opzionale non valorizzato,
-        // come TRicettaProdottoFinito.Insert per valida_al sulla PRIMA
-        // versione di una ricetta): VarType(Null) non porta nessuna
-        // informazione di tipo, quindi senza questo ramo FireDAC manda a
-        // PostgreSQL un parametro "di tipo sconosciuto" e il driver lo
-        // rifiuta con "[FireDAC][Phys][PG]-335 ... data type is unknown"
-        // (esattamente l'errore osservato in log durante
-        // ApplicaAdattamentoRicetta). Dichiarare qui ftWideString fa si'
-        // che FireDAC invii comunque un NULL, ma "tipizzato testo" (e' il
-        // tipo "unknown" del protocollo libpq): in un INSERT/UPDATE
-        // PostgreSQL lo converte da solo al tipo REALE della colonna di
-        // destinazione (date, integer, ...) - non serve che questo layer
-        // generico lo sappia. Un solo punto per ogni query di questo DAO
-        // che passa Null come parametro, non un fix per-colonna.
+        // Parametro Null "puro" (es. valida_al sulla prima versione di una ricetta):
+        // VarType(Null) non porta il tipo, e FireDAC manderebbe a PostgreSQL un parametro
+        // di tipo sconosciuto, rifiutato con "-335 ... data type is unknown". Dichiarare
+        // ftWideString fa inviare un NULL "unknown" per libpq, che PostgreSQL converte al
+        // tipo reale della colonna. Un solo punto per tutte le query del DAO, non un fix
+        // per colonna.
         if VarIsNull(Params[i]) then
         begin
           Result.Query.Params[i].DataType := ftWideString;
@@ -436,9 +416,8 @@ begin
       Q.SQL.Text := aQuery;
       for i := 0 to High(Params) do
       begin
-        // Vedi il commento gemello in getQueryResult (stesso DAO, stesso
-        // motivo): un parametro Null "puro" senza DataType esplicito fa
-        // fallire PostgreSQL con "-335 ... data type is unknown".
+        // Come in getQueryResult: un Null "puro" senza DataType fa fallire PostgreSQL con
+        // "-335 ... data type is unknown".
         if VarIsNull(Params[i]) then
         begin
           Q.Params[i].DataType := ftWideString;
@@ -516,12 +495,9 @@ begin
     raise Exception.Create(
       'ExecuteQueriesInTransaction: AQueries e AParamsList devono avere la stessa lunghezza.');
 
-  // Riusa ExecuteInTransaction: apre una connessione dedicata, avvia la
-  // transazione, esegue in sequenza tutte le query sulla STESSA
-  // connessione, e fa commit solo se nessuna solleva eccezione.
-  // ExecuteInTransaction gestisce gia' rollback + log + rilancio
-  // dell'eccezione in caso di errore: qui costruiamo solo il TFDQuery
-  // condiviso e ci scorriamo AQueries/AParamsList in parallelo.
+  // Riusa ExecuteInTransaction (connessione dedicata, stessa connessione per tutte le
+  // query, commit solo senza eccezioni; rollback, log e rilancio sono gia' gestiti). Qui si
+  // costruisce solo il TFDQuery condiviso.
   ExecuteInTransaction(
     procedure(AConn: TFDConnection)
     var
@@ -537,25 +513,17 @@ begin
           LQuery.SQL.Text := AQueries[i];
           for j := 0 to High(AParamsList[i]) do
           begin
-            // Stesso motivo dei due commenti gemelli in getQueryResult/
-            // executeQuery: un parametro Null senza DataType esplicito fa
-            // fallire PostgreSQL con "-335 ... data type is unknown".
+            // Come in getQueryResult: Null senza DataType, errore "-335".
             if VarIsNull(AParamsList[i][j]) then
             begin
               LQuery.Params[j].DataType := ftWideString;
               LQuery.Params[j].Value := AParamsList[i][j];
             end
-            // Stesso motivo del terzo commento gemello: FireDAC assegna ai
-            // parametri stringa una Size fissa (di default 4000 caratteri,
-            // vedi ftString/ftWideString) finche' non gli si dice il
-            // contrario. Sopra quella soglia il driver PG rifiuta con
-            // "-345 Data too large for variable". Emerso con
-            // TIndiceEmbeddingTool.Sincronizza (common/uIndiceEmbeddingTool.
-            // pas): un vettore a 384 dimensioni serializzato in testo supera
-            // facilmente i 4000 caratteri. ftMemo lascia che FireDAC invii
-            // il parametro senza un limite di lunghezza fisso - il cast
-            // "::vector" nella SQL del chiamante decide comunque il tipo
-            // reale lato Postgres, esattamente come per i parametri Null.
+            // FireDAC da' ai parametri stringa una Size di 4000 caratteri; oltre, il driver
+            // PG rifiuta con "-345 Data too large for variable". Capita in
+            // TIndiceEmbeddingTool.Sincronizza: un vettore serializzato in testo supera
+            // 4000 caratteri. ftMemo toglie il limite; il cast "::vector" nella SQL decide
+            // il tipo reale.
             else if (VarType(AParamsList[i][j]) = varString) or
                (VarType(AParamsList[i][j]) = varOleStr) or
                (VarType(AParamsList[i][j]) = varUString) then

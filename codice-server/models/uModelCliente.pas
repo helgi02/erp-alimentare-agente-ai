@@ -9,14 +9,9 @@ uses
   DbU;
 
 type
-  // Rappresenta un cliente B2B (tabella clienti). Speculare a TFornitore,
-  // ma con una differenza strutturale rilevante: il cliente ha DUE
-  // indirizzi distinti (fatturazione e consegna), perche' nello scenario
-  // di vendita la sede legale a cui fatturare puo' non coincidere con il
-  // punto fisico a cui va spedita la merce (es. catena di distribuzione
-  // con sede legale e magazzini separati). Per questo i campi indirizzo
-  // sono duplicati con suffisso _fatturazione / _consegna anziche' avere
-  // un'unica coppia via/citta/provincia/cap/paese come in TFornitore.
+  // Cliente B2B (tabella clienti). Speculare a TFornitore ma con due indirizzi,
+  // fatturazione e consegna (la sede legale puo' non coincidere con il punto di
+  // spedizione), quindi i campi indirizzo hanno suffisso _fatturazione / _consegna.
   TCliente = class
   private
     FID: Integer;
@@ -47,26 +42,23 @@ type
     property Email: string read FEmail write FEmail;
     property Telefono: string read FTelefono write FTelefono;
 
-    // Indirizzo di fatturazione (sede legale)
+    // Sede legale.
     property ViaFatturazione: string read FViaFatturazione write FViaFatturazione;
     property CittaFatturazione: string read FCittaFatturazione write FCittaFatturazione;
     property ProvinciaFatturazione: string read FProvinciaFatturazione write FProvinciaFatturazione;
     property CapFatturazione: string read FCapFatturazione write FCapFatturazione;
     property PaeseFatturazione: string read FPaeseFatturazione write FPaeseFatturazione;
 
-    // Indirizzo di consegna (destinazione fisica della merce)
+    // Destinazione fisica della merce.
     property ViaConsegna: string read FViaConsegna write FViaConsegna;
     property CittaConsegna: string read FCittaConsegna write FCittaConsegna;
     property ProvinciaConsegna: string read FProvinciaConsegna write FProvinciaConsegna;
     property CapConsegna: string read FCapConsegna write FCapConsegna;
     property PaeseConsegna: string read FPaeseConsegna write FPaeseConsegna;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_clienti_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TCliente;
     class function GetByPartitaIva(const APartitaIva: string): TCliente;
     class function GetAll: TObjectList<TCliente>;
@@ -92,13 +84,11 @@ const
     'creato_il, aggiornato_il ' +
     'FROM clienti ';
 
-{ TCliente }
-
 constructor TCliente.Create;
 begin
   inherited Create;
   FID := 0;
-  // Replicano i DEFAULT lato database per i nuovi record
+  // Replicano i DEFAULT del database per i nuovi record.
   FPaeseFatturazione := 'Italia';
   FPaeseConsegna      := 'Italia';
 end;
@@ -147,8 +137,7 @@ class function TCliente.GetByPartitaIva(const APartitaIva: string): TCliente;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // partita_iva ha un vincolo UNIQUE (clienti_partita_iva_key), come per
-  // TFornitore.
+  // partita_iva e' UNIQUE (clienti_partita_iva_key), come in TFornitore.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -188,10 +177,8 @@ end;
 
 class function TCliente.Delete(AID: Integer): Boolean;
 begin
-  // Cliente e' referenziato da ordini_vendita e ddt_uscita: in assenza di
-  // ON DELETE CASCADE lato DB, la query fallisce se esistono ordini o DDT
-  // collegati. Comportamento voluto: uno storico di vendita non va perso
-  // cancellando l'anagrafica cliente.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM clienti WHERE id = :id', [AID]);
 end;
@@ -200,10 +187,8 @@ function TCliente.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()). partita_iva ha un
-  // vincolo UNIQUE: un duplicato solleva un'eccezione da gestire a
-  // livello di controller (stesso pattern di TFornitore.Insert).
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO clienti ' +
     '(ragione_sociale, partita_iva, email, telefono, ' +
@@ -236,8 +221,7 @@ function TCliente.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_clienti_aggiornato_il lo valorizza automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE clienti SET ragione_sociale = :ragione_sociale, ' +
     'partita_iva = :partita_iva, email = :email, telefono = :telefono, ' +
@@ -302,8 +286,7 @@ end;
 
 procedure TCliente.FromJSONObject(AJSON: TJSONObject);
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('ragione_sociale', FRagioneSociale) then ;
   if AJSON.TryGetValue<string>('partita_iva', FPartitaIva) then ;
   if AJSON.TryGetValue<string>('email', FEmail) then ;

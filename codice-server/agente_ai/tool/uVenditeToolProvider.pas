@@ -13,32 +13,12 @@ uses
   uServiziVendite;
 
 type
-  // Tool provider MCP per lo scenario 2.2 (interrogazione vendite ad
-  // hoc). Una classe per scenario - TMCPServer.RegisterToolProvider
-  // accetta piu' provider distinti, quindi ritiro/richiamo e ricette
-  // avranno ciascuno il proprio TxxxToolProvider in tools/, invece di
-  // accumulare tutti i tool in un'unica classe: stesso principio "un
-  // file per responsabilita'" gia' seguito da model/services/controllers
-  // in questo progetto.
-  //
-  // Nessun metodo di costruzione schema qui: TMCPServer scansiona i
-  // metodi via RTTI leggendo [MCPTool]/[MCPParam] al momento di
-  // RegisterToolProvider (vedi CLAUDE.md della libreria MCP), quindi la
-  // generazione dello schema JSON e' interamente a carico del framework.
-  //
-  // cliente_id/prodotto_id (aggiunti insieme alla UI di disambiguazione
-  // lato frontend): quando il frontend mostra i candidati come pulsanti
-  // e l''utente ne clicca uno, il round successivo puo'' riferirsi al
-  // cliente/prodotto per id invece che per nome. E' lo stesso principio
-  // "tool generico e parametrico" del documento di progetto applicato a
-  // se stesso: due parametri opzionali in piu' sullo stesso tool, non un
-  // secondo tool "get_list_vendite_by_id". Il motivo per cui serve
-  // davvero (e non e'' solo comodita''): il match testuale esatto in
-  // TServizioVendite.RisolviCliente/RisolviProdotto non garantisce
-  // l''unicita'' se due anagrafiche condividono la stessa ragione
-  // sociale/denominazione (es. filiali) - in quel caso rimandare il nome
-  // esatto ripresenterebbe la stessa ambiguita'' all''infinito, mentre
-  // l''id la elimina per costruzione.
+  // Tool provider MCP dello scenario 2.2 (interrogazione vendite ad hoc). Una classe per
+  // scenario. Lo schema JSON lo genera la libreria via RTTI da [MCPTool]/[MCPParam].
+  // cliente_id/prodotto_id: dopo la disambiguazione in frontend l'utente clicca un
+  // candidato e il turno successivo usa l'id. Sono due parametri opzionali in piu' sullo
+  // stesso tool, non un secondo tool. Servono davvero: il match esatto sul nome non
+  // garantisce l'unicita' (es. filiali con la stessa ragione sociale), mentre l'id si.
   TVenditeToolProvider = class(TMCPToolProvider)
   public
     [MCPTool('get_list_vendite',
@@ -62,9 +42,8 @@ type
       [MCPParam('Data finale del periodo, formato YYYY-MM-DD.', TMCPParamPresence.Optional)]
         const ADataFine: string
     ): TMCPToolResult;
-    // Contratti dei tool di questo provider per il pianificatore: schema del
-    // risultato, lettura/scrittura, conferma, vincoli sugli input (vedi
-    // agente_ai/tool/uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratti dei tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
@@ -74,21 +53,13 @@ uses
   System.Math;
 
 const
-  // Limite prudenziale sulle righe di dettaglio restituite al modello:
-  // NON e' una misura per proteggere l'affidabilita' della narrazione
-  // (quella e' gia' garantita dal fatto che il dettaglio e' dato
-  // strutturato, non testo che il modello deve trascrivere), mE' solo un
-  // limite di payload/contesto - una interrogazione troppo larga (es.
-  // nessun filtro tranne il periodo) potrebbe restituire migliaia di
-  // righe, che non ha senso spedire tutte a un modello locale.
+  // Limite di payload/contesto sulle righe di dettaglio: una query troppo larga darebbe
+  // migliaia di righe, inutili per un modello locale. Non serve all'affidabilita' della
+  // narrazione.
   MAX_RIGHE_DETTAGLIO = 100;
 
-{ Funzioni di supporto, private all'unit }
-
-// Converte una stringa "YYYY-MM-DD" in TDateTime, o restituisce 0
-// (sentinella "non specificata") se la stringa e' vuota. Parsing manuale
-// (non StrToDate) per essere indipendente dal FormatSettings di sistema,
-// che potrebbe non usare il separatore/ordine ISO atteso dal modello.
+// "YYYY-MM-DD" -> TDateTime, 0 se vuota ("non specificata"). Parsing manuale, indipendente
+// dal FormatSettings di sistema.
 function ParseDataISO(const AValore: string): TDateTime;
 var
   LAnno, LMese, LGiorno: Integer;
@@ -105,25 +76,15 @@ begin
     raise Exception.CreateFmt(
       'Data "%s" non valida: formato atteso YYYY-MM-DD.', [AValore]);
 
-  // CONTROLLO DI DIFESA (tappa 13): TryEncodeDate invece di EncodeDate, cosi'
-  // una data impossibile (es. 2026-02-30 o mese 13) da' lo stesso messaggio
-  // chiaro del formato sbagliato, e non l'errore generico della libreria.
+  // TryEncodeDate: una data impossibile (2026-02-30, mese 13) da' lo stesso messaggio
+  // chiaro del formato sbagliato.
   if not TryEncodeDate(LAnno, LMese, LGiorno, Result) then
     raise Exception.CreateFmt(
       'Data "%s" non valida: il giorno o il mese non esistono (formato atteso YYYY-MM-DD).', [AValore]);
 end;
 
-// Converte una stringa in un id positivo, o restituisce 0 (sentinella
-// "non specificato") se la stringa e' vuota - stesso principio di
-// ParseDataISO sopra. ANomeCampo serve solo per un messaggio d'errore
-// leggibile ("cliente_id" o "prodotto_id"), non entra nella logica.
-//
-// Perche' l'id arriva come stringa e non come parametro Integer nativo:
-// in questo progetto TUTTI i parametri esposti da [MCPParam] sono
-// stringa (vedi anche ADataInizio/ADataFine sopra), convertiti a mano
-// nell'implementazione - e' la stessa scelta gia' fatta per le date, qui
-// riusata per coerenza invece di introdurre un secondo idioma per i
-// parametri numerici opzionali.
+// Stringa -> id positivo, 0 se vuota. ANomeCampo serve solo al messaggio d'errore. L'id e'
+// una stringa perche' tutti i parametri [MCPParam] del progetto lo sono (come le date).
 function ParseIdOpzionale(const AValore, ANomeCampo: string): Integer;
 var
   LValore: string;
@@ -137,15 +98,11 @@ begin
       '%s "%s" non valido: deve essere un numero intero positivo.', [ANomeCampo, AValore]);
 end;
 
-// Tolleranza sull'errore piu' frequente osservato nella valutazione con LLM
-// locali: il modello mette in cliente_id / prodotto_id un valore che NON e'
-// un id numerico (tipicamente il codice prodotto "PF003", oppure una ragione
-// sociale). Invece di rifiutare la chiamata - il che costringe l'utente a
-// riformulare - il valore viene trattato come filtro TESTUALE: se AIdOTesto
-// non e' un intero positivo lo si sposta in ATestoFiltro (solo se il filtro
-// testuale non e' gia' valorizzato) e l'id risulta non specificato. Un id
-// numerico valido e' lasciato intatto. Il filtro testuale gestisce sia i
-// codici sia le denominazioni (vedi TServizioVendite.RisolviProdotto).
+// Tolleranza sull'errore piu' frequente dei modelli locali: in cliente_id/prodotto_id
+// mettono un codice ("PF003") o una ragione sociale. Invece di rifiutare, se non e' un
+// intero positivo il valore passa a ATestoFiltro (se libero) e l'id risulta non
+// specificato. Il filtro testuale gestisce codici e denominazioni
+// (TServizioVendite.RisolviProdotto).
 procedure NormalizzaIdOTesto(var AIdOTesto, ATestoFiltro: string);
 var
   LValore: string;
@@ -160,11 +117,8 @@ begin
   end;
 end;
 
-// Un valore testuale singolo (parametro del tool) diventa un array di
-// zero o un elemento per TServizioVendite.InterrogaVendite, che lavora
-// per array in vista di un futuro supporto a filtri multipli - vedi
-// discussione di progetto sul perche' oggi il tool espone un solo valore
-// per filtro (il framework MCP non supporta parametri array).
+// Un valore singolo diventa un array di 0 o 1 elemento per InterrogaVendite, che lavora per
+// array; il framework MCP non supporta parametri array in RTTI.
 function ValoreSingoloComeArray(const AValore: string): TArray<string>;
 begin
   if Trim(AValore) = '' then
@@ -205,10 +159,8 @@ begin
   end;
 end;
 
-// Costruisce il tool_result per il ramo "richiede_disambiguazione":
-// libera anche gli oggetti di risoluzione problematici (la loro
-// proprieta' e' passata dal servizio a questa funzione, vedi il
-// commento di ownership su TServizioVendite.InterrogaVendite).
+// Tool_result per "richiede_disambiguazione": libera anche gli oggetti di risoluzione
+// (ownership passata dal servizio, vedi InterrogaVendite).
 function CostruisciRispostaDisambiguazione(
   const AProblemiCliente: TArray<TRisoluzioneCliente>;
   const AProblemiProdotto: TArray<TRisoluzioneProdotto>): string;
@@ -260,15 +212,10 @@ begin
   end;
 end;
 
-// Costruisce il tool_result per il ramo "ok": periodo effettivamente
-// applicato, aggregato complessivo, dettaglio righe (troncato a
-// MAX_RIGHE_DETTAGLIO). Libera ARisultato (e il suo Dettaglio, gestito
-// dal distruttore di TRisultatoVendite) prima di uscire.
-//
-// AFiltroCliente/AFiltroProdotto: True se la richiesta filtrava per cliente/
-// prodotto (per id o per nome); AClienteIdEsatto/AProdottoIdEsatto: l'id se
-// era stato passato direttamente (<= 0 se no). Servono solo a costruire
-// "apertura_vista", vedi sotto.
+// Tool_result per "ok": periodo applicato, aggregato, dettaglio troncato a
+// MAX_RIGHE_DETTAGLIO. Libera ARisultato prima di uscire. AFiltroCliente/AFiltroProdotto:
+// la richiesta filtrava per cliente/prodotto; AClienteIdEsatto/AProdottoIdEsatto: l'id
+// passato direttamente (<= 0 se no). Servono a "apertura_vista".
 function CostruisciRispostaOk(ARisultato: TRisultatoVendite;
   AFiltroCliente, AFiltroProdotto: Boolean;
   AClienteIdEsatto, AProdottoIdEsatto: Integer): string;
@@ -318,16 +265,11 @@ begin
 
     LRoot.AddPair('dettaglio_troncato', TJSONBool.Create(ARisultato.Dettaglio.Count > MAX_RIGHE_DETTAGLIO));
 
-    // "apertura_vista": la vista Vendite del gestionale con GLI STESSI filtri
-    // di questa interrogazione (stessa forma {"vista","parametri"} usata da
-    // uRicetteToolProvider). "modalita":"pulsante" = la chat non naviga da
-    // sola, mostra un pulsante: qui il risultato e' gia' leggibile in chat,
-    // la vista e' un approfondimento che sceglie l'utente.
-    // Gli id servono risolti: se il filtro era un NOME, l'id si legge dalla
-    // prima riga (il nome e' stato risolto a UN solo cliente/prodotto,
-    // altrimenti saremmo nel ramo di disambiguazione). Se non ci sono righe
-    // da cui leggerlo il campo non si aggiunge: meglio nessun pulsante che
-    // una vista con filtri piu' larghi della domanda.
+    // "apertura_vista": la vista Vendite con gli stessi filtri (forma {"vista","parametri"}
+    // come in uRicetteToolProvider). "modalita":"pulsante": la chat mostra un pulsante, la
+    // vista e' un approfondimento. Se il filtro era un nome, l'id si legge dalla prima riga
+    // (risolto a un solo cliente/prodotto); senza righe il campo non si aggiunge: meglio
+    // nessun pulsante che una vista piu' larga della domanda.
     LClienteVista := AClienteIdEsatto;
     LProdottoVista := AProdottoIdEsatto;
     LVistaCoerente := True;
@@ -369,8 +311,6 @@ begin
   end;
 end;
 
-{ TVenditeToolProvider }
-
 function TVenditeToolProvider.GetListVendite(const ARagioneSocialeCliente,
   AClienteId, ANomeProdotto, AProdottoId, ADataInizio, ADataFine: string): TMCPToolResult;
 var
@@ -381,26 +321,20 @@ var
   LRisultato: TRisultatoVendite;
   LRagioneSociale, LNomeProdotto, LClienteIdTxt, LProdottoIdTxt: string;
 begin
-  // Il parsing data/id puo' sollevare un'eccezione se il modello passa un
-  // valore fuori formato: e' un errore "di contratto" (il modello non ha
-  // rispettato la descrizione del parametro), non un caso di dominio -
-  // qui e' accettabile lasciarla propagare, il livello di trasporto MCP
-  // la trasformera' in un errore di tool_use che il modello vede e puo'
-  // correggere al turno successivo.
+  // Data o id fuori formato: errore di contratto del modello, lasciato propagare; il
+  // livello MCP lo trasforma in errore di tool che il modello puo' correggere.
   LDataInizio := ParseDataISO(ADataInizio);
   LDataFine := ParseDataISO(ADataFine);
 
-  // CONTROLLO DI DIFESA (tappa 13): periodo al contrario. Prima la query
-  // girava lo stesso e tornava zero righe, cioe' "nessuna vendita": una
-  // risposta falsa. 0 = data non indicata (vedi ParseDataISO).
+  // Periodo al contrario: prima la query tornava zero righe, cioe' un falso "nessuna
+  // vendita". 0 = data non indicata.
   if (LDataInizio <> 0) and (LDataFine <> 0) and (LDataInizio > LDataFine) then
     raise Exception.CreateFmt(
       'Periodo non valido: ADataInizio (%s) e'' successiva ad ADataFine (%s).',
       [ADataInizio, ADataFine]);
 
-  // Copie locali: i parametri sono const. Un "id" non numerico (es. il
-  // codice PF003 messo in prodotto_id) diventa filtro testuale, vedi
-  // NormalizzaIdOTesto.
+  // Copie locali: i parametri sono const. Un "id" non numerico (es. PF003) diventa filtro
+  // testuale (NormalizzaIdOTesto).
   LRagioneSociale := ARagioneSocialeCliente;
   LNomeProdotto := ANomeProdotto;
   LClienteIdTxt := AClienteId;
@@ -417,29 +351,20 @@ begin
     LDataInizio, LDataFine,
     LProblemiCliente, LProblemiProdotto);
 
-  // Nessun risultato: filtri ambigui o non trovati (vedi
-  // CostruisciRispostaDisambiguazione).
+  // Filtri ambigui o non trovati.
   if LRisultato = nil then
     Exit(TMCPToolResult.Text(
       CostruisciRispostaDisambiguazione(LProblemiCliente, LProblemiProdotto)));
 
-  // CostruisciRispostaOk libera LRisultato internamente (vedi il suo
-  // commento) - per questo non c'e' nessun Free esplicito qui.
+  // CostruisciRispostaOk libera LRisultato: nessun Free qui.
   Result := TMCPToolResult.Text(CostruisciRispostaOk(LRisultato,
     (LClienteIdEsatto > 0) or (Trim(LRagioneSociale) <> ''),
     (LProdottoIdEsatto > 0) or (Trim(LNomeProdotto) <> ''),
     LClienteIdEsatto, LProdottoIdEsatto));
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTI DEI TOOL DI QUESTO PROVIDER (tappa 2 del porting del pianificatore,
-// vedi agente_ai/tool/uContrattiTool.pas). Portati da mcp_delphi.py del prototipo:
-// DEFINIZIONI (output_schema, effetto, conferma), INTEGRAZIONI_INPUT (vincoli
-// sugli input) e ALMENO_UNO. Gli schemi di output descrivono le risposte
-// costruite piu' sopra in questa unit: se cambia una risposta, va cambiato
-// anche il suo schema qui sotto. Il test scripts/prototipo_pianificatore/tests/
-// test_contratti_delphi.py li confronta con quelli del prototipo.
-// ---------------------------------------------------------------------------
+// Contratti (vedi uContrattiTool.pas). Gli schemi di output descrivono le risposte
+// costruite sopra: se cambia una risposta, va cambiato anche lo schema.
 
 const
   SCHEMA_OUTPUT_GET_LIST_VENDITE =

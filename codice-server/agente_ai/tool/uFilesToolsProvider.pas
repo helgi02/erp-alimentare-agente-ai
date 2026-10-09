@@ -1,80 +1,23 @@
 ﻿unit uFilesToolsProvider;
 
-(* ============================================================================
-  TFilesToolsProvider — tool MCP generico per generare file (CSV, PDF) a
-  partire da dati che il MODELLO stesso fornisce, non il DB.
-
-  ── Perche' questo provider e' diverso da TVenditeToolProvider ─────────────
-  get_list_vendite (uVenditeToolProvider.pas) e' un tool "RTTI": i suoi
-  parametri sono dichiarati come argomenti Pascal normali (const ANomeCliente:
-  string, ecc.) e il framework li scopre via RTTI leggendo gli attributi
-  [MCPTool]/[MCPParam]. Questa via supporta SOLO parametri scalari (string,
-  integer, double, boolean) - vedi TMCPServer.DelphiTypeToJsonSchema nella
-  libreria: non c'e' modo di dichiarare un parametro Pascal che diventi uno
-  schema JSON "array" o "object" veri.
-
-  I due tool esposti qui (generate_csv, generate_pdf) hanno invece bisogno di
-  "colonne" (un array di definizioni colonna) e "righe" (un array di righe,
-  cioe' di oggetti) come parametri REALI, non stringhe da interpretare a
-  mano. Per questo il provider usa la via "dinamica" della libreria MCP:
-
-    - GetDynamicToolDefs: dichiara a mano nome/descrizione/parametri di ogni
-      tool (TMCPDynamicToolDef/TMCPDynamicParamDef), specificando
-      esplicitamente JsonSchemaType := 'array' dove serve - non essendoci un
-      parametro Pascal reale dietro, non c'e' RTTI da leggere.
-    - InvokeDynamic: riceve il TJDOJsonObject "arguments" cosi' come arrivato
-      dal client MCP (nessun marshalling automatico verso tipi Pascal, a
-      differenza della via RTTI) e lo interpreta qui dentro con l'API di
-      JsonDataObjects.
-
-  ── Flusso d'uso previsto ───────────────────────────────────────────────────
-  1. Il modello chiama un tool "dati" qualsiasi (es. get_list_vendite) e
-     riceve una risposta JSON con un array di righe (es. "dettaglio").
-  2. Il modello chiama generate_csv o generate_pdf passando:
-       colonne: [{"campo": "cliente", "intestazione": "Cliente"}, ...
-       righe:   [ {...}, {...}, ... ]   <- le righe ricevute al passo 1,
-                                            COSI' COME SONO, non riscritte
-     "campo" indica quale chiave leggere da ogni riga; "intestazione" e' il
-     testo di colonna nel file generato.
-  3. Il tool SCRIVE il file nella cartella di export del server (TConfig.
-     ExportFolder, di default "export" accanto all'eseguibile) e risponde
-     con un URL di download vero e proprio (es. http://localhost:8080/
-     export/20260724_161005123_vendite.csv), servito come contenuto
-     statico da TMVCStaticFilesMiddleware (vedi uWebModule.pas).
-
-     *** Perche' non embedded nel tool_result (prima versione) ***
-     La versione precedente restituiva il contenuto incorporato nella
-     risposta JSON-RPC (Resource/ResourceBlob, vedi TMCPToolResult) per non
-     scrivere nulla su disco. Provato con LM Studio (client MCP reale usato
-     in questo progetto): il client mostra il tool_result solo come JSON
-     grezzo nel pannello "Result" della chiamata, senza renderizzare i
-     content-block "resource"/"resourceBlob" come allegato scaricabile - il
-     modello vede il contenuto ma non c'e' modo per l'utente di scaricare
-     il file. Un vero URL HTTP, invece, e' testo semplice: qualunque client
-     (e qualunque modello, riportandolo in chat) lo puo' mostrare/copiare,
-     a prescindere dal supporto o meno delle MCP resource.
-
-     *** Limiti noti di questa scelta ***
-     - I file scritti in ExportFolder non vengono mai ripuliti
-       automaticamente: si accumulano nel tempo. Accettabile per una demo/
-       tesi; in produzione servirebbe un job di pulizia (es. cancellazione
-       dei file piu' vecchi di N ore) o una directory temporanea dedicata.
-     - /export non richiede autenticazione: chiunque conosca (o indovini)
-       il nome del file generato puo' scaricarlo. Coerente con l'assunzione
-       di progetto "infrastruttura locale, nessun dato esce" - da rivedere
-       se il server fosse mai esposto oltre localhost/rete fidata.
-
-  ── Riuso dei motori di export ──────────────────────────────────────────────
-  La costruzione vera e propria del CSV/PDF non e' qui: e' delegata a
-  TEsportazioneCSV/TEsportazionePDF (services/uEsportazioneCSV.pas,
-  services/uEsportazionePDF.pas), generici su un tipo di riga T. Qui T e'
-  SEMPRE TJDOJsonObject (la riga e' letteralmente l'oggetto JSON che il
-  modello ha passato) - questo file si occupa solo di leggere "colonne"/
-  "righe" dall'input, di tradurre ogni definizione colonna in un
-  TColonnaCSV<TJDOJsonObject>/TColonnaPDF<TJDOJsonObject> (nome + funzione
-  che legge quel campo da una riga), e di scrivere il risultato su disco
-  con un nome file univoco e sicuro (vedi CostruisciNomeFileUnico).
-  ============================================================================ *)
+// Tool MCP generici per generare file (CSV, PDF) da dati forniti dal modello, non dal DB.
+// Provider dinamico: i parametri "colonne" e "righe" devono essere array veri, e la via
+// RTTI supporta solo parametri scalari. GetDynamicToolDefs dichiara a mano i tool
+// (JsonSchemaType := 'array' dove serve); InvokeDynamic riceve gli argomenti JSON cosi'
+// come arrivano, senza marshalling.
+// Flusso: il modello ottiene le righe da un tool dati e le passa a
+// generate_csv/generate_pdf con le colonne ({"campo","intestazione"}). Il tool scrive il
+// file in TConfig.ExportFolder e risponde con un URL di download, servito da
+// TMVCStaticFilesMiddleware (uWebModule.pas).
+// Perche' un URL e non il contenuto nel tool_result (Resource/ResourceBlob): LM Studio
+// mostra il risultato solo come JSON grezzo, senza renderizzare l'allegato, e l'utente non
+// poteva scaricare il file. Un URL e' testo semplice e qualunque client puo' riportarlo.
+// Limiti noti: i file in ExportFolder non vengono ripuliti (in produzione servirebbe un job
+// di pulizia); /export non richiede autenticazione, accettabile per infrastruttura locale
+// ma da rivedere se il server uscisse dalla rete fidata.
+// La costruzione di CSV/PDF e' in TEsportazioneCSV/TEsportazionePDF, con T =
+// TJDOJsonObject: qui si leggono "colonne"/"righe" e si scrive il file con un nome univoco
+// e sicuro (CostruisciNomeFileUnico).
 
 interface
 
@@ -96,75 +39,35 @@ type
     function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; override;
     function InvokeDynamic(const AToolName: string;
       AArguments: TJDOJsonObject): TMCPToolResult; override;
-    // Contratti dei tool di questo provider per il pianificatore: schema del
-    // risultato, lettura/scrittura, conferma, vincoli sugli input (vedi
-    // agente_ai/tool/uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratti dei tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
 implementation
 
 type
-  // Una voce del parametro "colonne": Campo e' la chiave da leggere in ogni
-  // riga, Intestazione e' il testo da stampare come intestazione di colonna
-  // nel file generato (uguale a Campo se il chiamante non la specifica).
+  // Voce di "colonne": Campo e' la chiave da leggere in ogni riga, Intestazione il titolo
+  // di colonna (uguale a Campo se omessa).
   TDefinizioneColonna = record
     Campo: string;
     Intestazione: string;
   end;
 
-{ Funzioni di supporto, private all'unit }
-
-// Legge il valore del campo ACampo dalla riga ARiga come stringa
-// stampabile, per qualunque colonna venga chiesta (sia CSV sia PDF passano
-// da qui - vedi CreaEstrattoreCampo). Non e' specifico di nessuno scenario:
-// non sa nulla di vendite, ritiro/richiamo o altro, sa solo "come si legge
-// un campo di un TJDOJsonObject come testo".
-//
-// TJsonObject.S[] fa gia' l'auto-cast per string/int/long/float/bool/data
-// (vedi il commento sulla property in JsonDataObjects.pas: "returns '' if
-// property doesn't exist, auto type-cast except for array/object") - qui
-// serve gestire ESPLICITAMENTE solo il caso array/object, per cui l'auto-
-// cast non esiste: si ripiega sulla rappresentazione JSON compatta del
-// valore, invece di lasciare che .S[] restituisca una stringa vuota che
-// nasconderebbe silenziosamente il dato.
-// Se AValore e' una data o una data-ora in formato ISO 8601 (come tipicamente
-// serializzata da DB/JSON, es. "2026-08-01T00:00:00.000Z" o "2026-08-01"),
-// la riformatta in gg/mm/aaaa (con l'orario in coda solo se presente e
-// diverso da mezzanotte - una data-ora a mezzanotte e' quasi sempre una
-// colonna DATE serializzata con un orario fittizio, non un dato realmente
-// time-sensitive, quindi l'orario si scarta). Se AValore non corrisponde al
-// pattern, viene restituito invariato: questa funzione non sa nulla del
-// significato del campo, riconosce solo la FORMA del valore - e' percio'
-// generica quanto LeggiCellaComeStringa che la chiama, e si applica quindi
-// automaticamente sia all'export CSV sia a quello PDF (entrambi passano da
-// li'), senza dipendere da come il modello decide di formattare le date.
+// Legge ACampo da ARiga come stringa stampabile (CSV e PDF passano da qui). TJsonObject.S[]
+// fa gia' l'auto-cast tranne per array/object, dove darebbe una stringa vuota che
+// nasconderebbe il dato: li' si ripiega sul JSON compatto.
+// Se il valore e' una data o data-ora ISO 8601 ("2026-08-01T00:00:00.000Z", "2026-08-01")
+// la riformatta in gg/mm/aaaa, con l'orario solo se diverso da mezzanotte (e' quasi sempre
+// una colonna DATE con orario fittizio). Altrimenti restituisce il valore invariato:
+// riconosce la forma, non il significato del campo.
 function FormattaSeData(const AValore: string): string;
 const
-  // BUG CORRETTO (ERegularExpressionError "Index out of bounds (4)", visto
-  // ripetutamente come first-chance exception in debug durante l'export
-  // CSV/PDF - il debugger la segnala comunque anche se poi viene intercettata,
-  // vedi sotto). Il pattern originale era UNO SOLO, con la parte orario
-  // interamente opzionale: '...(?:[T ](\d{2}):(\d{2}):(\d{2})...)?$' - i
-  // gruppi 4/5/6 (ora/minuto/secondo) vivono dentro un gruppo non catturante
-  // opzionale. Su un valore SENZA orario (il caso piu' comune: "2026-08-01",
-  // che e' come arrivano quasi tutte le date da get_list_vendite) quel blocco
-  // opzionale non partecipa affatto al match, e con questo motore regex la
-  // riga "LMatch.Groups[4]" non restituisce un gruppo "non riuscito" ma
-  // solleva ERegularExpressionError: l'eccezione veniva silenziosamente
-  // inghiottita dal blocco "except Exit" qui sotto (pensato per un errore
-  // diverso, vedi il suo commento), quindi la funzione uscendo in anticipo
-  // ha sempre lasciato Result = AValore, cioe' la data non e' MAI stata
-  // riformattata in gg/mm/aaaa per un valore senza orario - visibile nei CSV
-  // gia' esportati (colonna "Data Ordine" ancora in aaaa-mm-gg).
-  //
-  // Rimedio: due pattern SEPARATI invece di uno con una parte opzionale.
-  // Si prova prima quello con l'orario (tutti i suoi gruppi sono OBBLIGATORI
-  // per costruzione, quindi se il match riesce i gruppi 1..6 esistono e sono
-  // partecipanti per certo); solo se non trova orario si prova il pattern
-  // "sola data" (3 gruppi, anch'essi tutti obbligatori). Cosi' non si indicizza
-  // mai un gruppo la cui esistenza dipenda da una parte opzionale del pattern -
-  // l'ambiguita' che ha causato il bug non puo' piu' presentarsi.
+  // Due pattern separati (con orario / solo data) invece di uno con la parte orario
+  // opzionale. Con un gruppo opzionale non partecipante, Groups[4] solleva
+  // ERegularExpressionError invece di restituire un gruppo vuoto; l'eccezione veniva
+  // inghiottita dall'except Exit e le date senza orario restavano in aaaa-mm-gg. Qui tutti
+  // i gruppi di ogni pattern sono obbligatori.
   PATTERN_DATA_ORA = '^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?Z?$';
   PATTERN_SOLO_DATA = '^(\d{4})-(\d{2})-(\d{2})$';
 var
@@ -225,14 +128,9 @@ begin
   end;
 end;
 
-// Costruisce la funzione di estrazione per UNA colonna. ACampo e' un
-// PARAMETRO di questa funzione (non una variabile del ciclo chiamante) di
-// proposito: se si costruisse la closure direttamente dentro un "for" che
-// riusa la stessa variabile locale ad ogni iterazione, tutte le closure
-// catturerebbero la STESSA variabile e finirebbero per leggere tutte
-// l'ultimo campo del ciclo (bug classico di cattura in Delphi/molti altri
-// linguaggi) - passare per un parametro di funzione da' a ciascuna closure
-// la propria copia indipendente.
+// ACampo e' un parametro, non la variabile del ciclo chiamante, di proposito: in un for
+// ogni closure catturerebbe la stessa variabile e tutte leggerebbero l'ultimo campo. Il
+// parametro da' a ciascuna la propria copia.
 function CreaEstrattoreCampo(const ACampo: string): TFunc<TJDOJsonObject, string>;
 begin
   Result :=
@@ -242,13 +140,9 @@ begin
     end;
 end;
 
-// Legge e valida il parametro "colonne": deve essere un array non vuoto di
-// oggetti {"campo": "...", "intestazione": "..." (opzionale)}. Solleva
-// un'eccezione con un messaggio pensato per il modello (non per un log di
-// sistema) su qualunque forma imprevista - InvokeDynamic la trasforma in
-// TMCPToolResult.Error, cosi' il modello vede il problema e puo' correggere
-// la chiamata al turno successivo invece di ricevere un errore di trasporto
-// opaco.
+// Legge "colonne": array non vuoto di {"campo", "intestazione" (opzionale)}. Su qualunque
+// forma imprevista solleva un'eccezione con messaggio per il modello, che InvokeDynamic
+// trasforma in errore del tool: il modello puo' correggere la chiamata.
 function LeggiDefinizioniColonne(AArguments: TJDOJsonObject): TArray<TDefinizioneColonna>;
 var
   LColonne: TJDOJsonArray;
@@ -281,16 +175,13 @@ begin
     if Trim(LColonnaObj.S['intestazione']) <> '' then
       Result[I].Intestazione := LColonnaObj.S['intestazione']
     else
-      // Nessuna intestazione esplicita: usa il nome del campo cosi' com'e'
-      // (meglio un'intestazione un po' tecnica che un file senza intestazione).
+      // Senza intestazione: il nome del campo (meglio tecnico che nessuna intestazione).
       Result[I].Intestazione := Result[I].Campo;
   end;
 end;
 
-// Legge e valida il parametro "righe": un array non vuoto di oggetti. Le
-// singole righe restituite sono RIFERIMENTI dentro AArguments (di proprieta'
-// del chiamante di InvokeDynamic, cioe' del framework) - questa funzione
-// non ne prende possesso e non li libera.
+// Legge "righe": array non vuoto di oggetti. Sono riferimenti dentro AArguments, di
+// proprieta' del framework: non vanno liberati.
 function LeggiRighe(AArguments: TJDOJsonObject): TArray<TJDOJsonObject>;
 var
   LRighe: TJDOJsonArray;
@@ -312,8 +203,7 @@ begin
   end;
 end;
 
-// Traduce le definizioni colonna (generiche, lette dal JSON) nel formato
-// richiesto dal motore CSV condiviso (services/uEsportazioneCSV.pas).
+// Colonne generiche -> formato del motore CSV condiviso.
 function CostruisciColonneCSV(
   const ADefinizioni: TArray<TDefinizioneColonna>): TArray<TColonnaCSV<TJDOJsonObject>>;
 var
@@ -325,7 +215,7 @@ begin
       ADefinizioni[I].Intestazione, CreaEstrattoreCampo(ADefinizioni[I].Campo));
 end;
 
-// Come sopra, per il motore PDF condiviso (services/uEsportazionePDF.pas).
+// Come sopra, per il motore PDF.
 function CostruisciColonnePDF(
   const ADefinizioni: TArray<TDefinizioneColonna>): TArray<TColonnaPDF<TJDOJsonObject>>;
 var
@@ -337,10 +227,8 @@ begin
       ADefinizioni[I].Intestazione, CreaEstrattoreCampo(ADefinizioni[I].Campo));
 end;
 
-// Nome file "grezzo" richiesto dal chiamante (parametro opzionale "nome_file"):
-// se assente o vuoto, ADefault. Nessuna validazione qui - il nome arriva
-// cosi' com'e' dal modello e va sempre ripulito da CostruisciNomeFileUnico
-// prima di essere usato come nome file reale su disco.
+// Nome richiesto dal modello ("nome_file"), o ADefault se vuoto. Non validato qui: va
+// ripulito da CostruisciNomeFileUnico.
 function NomeFileRichiesto(AArguments: TJDOJsonObject; const ADefault: string): string;
 begin
   if AArguments.Contains('nome_file') and (Trim(AArguments.S['nome_file']) <> '') then
@@ -349,21 +237,10 @@ begin
     Result := ADefault;
 end;
 
-// Costruisce un nome file SICURO e UNIVOCO per il file da scrivere in
-// TConfig.ExportFolder, a partire dal nome "grezzo" richiesto dal modello.
-//
-// Sicurezza: ANomeRichiesto arriva da un parametro di tool MCP, cioe' da
-// testo che il modello ha generato - non fidarsi mai che sia un nome file
-// valido. TPath.GetFileNameWithoutExtension scarta qualunque componente di
-// percorso (cartelle, "..", ecc.); il filtro carattere-per-carattere che
-// segue elimina anche cio' che restasse (separatori, due punti, ecc.),
-// tenendo solo lettere/cifre/underscore/trattino. Il risultato non puo'
-// quindi mai uscire da ExportFolder (niente path traversal).
-//
-// Univocita': un prefisso timestamp con i millisecondi rende la collisione
-// fra due chiamate concorrenti estremamente improbabile - accettabile per
-// questo scenario (non serve una garanzia crittografica, solo evitare che
-// due export ravvicinati si sovrascrivano).
+// Nome file sicuro e univoco per ExportFolder. Il nome arriva dal modello, quindi non e'
+// fidato: GetFileNameWithoutExtension scarta i componenti di percorso e il filtro tiene
+// solo lettere, cifre, underscore e trattino, quindi niente path traversal. Il prefisso
+// timestamp con millisecondi evita che due export ravvicinati si sovrascrivano.
 function CostruisciNomeFileUnico(const ANomeRichiesto, AEstensione: string): string;
 var
   LBase: string;
@@ -389,12 +266,9 @@ begin
   Result := FormatDateTime('yyyymmdd_hhnnsszzz', Now) + '_' + LPulito + '.' + AEstensione;
 end;
 
-{ TFilesToolsProvider }
-
 function TFilesToolsProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
 
-  // Costruisce un TMCPDynamicParamDef: helper locale solo per non ripetere
-  // l'assegnazione campo per campo quattro volte sotto.
+  // Helper per non ripetere l'assegnazione campo per campo.
   function DefParam(const AName, ADescription: string; ARequired: Boolean;
     const AJsonSchemaType: string): TMCPDynamicParamDef;
   begin
@@ -419,15 +293,11 @@ const
     'risulterebbe incompleto o con valori inventati. Se i dati sono di un turno precedente, ' +
     'prima va rieseguito il tool che li legge, con gli stessi filtri.';
 
-  // NOTA (03/10/2026) sul testo qui sopra. Prima diceva "copia le righe cosi'
-  // come le hai ricevute": con il pianificatore, a un seguito come "esportalo
-  // in csv" il modello ricopiava le righe dallo storico della conversazione,
-  // che pero' riporta solo le prime 3 di ogni elenco (uStoricoTurni,
-  // MaxElementi). Le altre le ricostruiva dal testo della risposta,
-  // inventando gli id: il validatore bloccava il piano con
-  // VALORE_NON_ANCORATO (conversazione 0B4607C4, turno 4). La strada giusta e'
-  // rileggere i dati e passarli per riferimento: il modello non riscrive
-  // nessuna riga, quindi non puo' sbagliarla ne' perderla.
+  // Prima il testo diceva "copia le righe cosi' come le hai ricevute": a un seguito come
+  // "esportalo in csv" il modello ricopiava le righe dallo storico, che riporta solo le
+  // prime 3 di ogni elenco (uStoricoTurni, MaxElementi), e inventava gli id
+  // (VALORE_NON_ANCORATO). Meglio rileggere i dati e passarli per riferimento: il modello
+  // non riscrive righe.
   DESCR_NOME_FILE =
     'Nome file suggerito, es. "vendite" (opzionale, un default viene usato se assente). Diventa ' +
     'parte del nome del file scaricabile: viene ripulito da caratteri non validi e reso univoco ' +
@@ -476,17 +346,14 @@ begin
   if AArguments = nil then
     Exit(TMCPToolResult.Error('Argomenti mancanti: servono "colonne" e "righe".'));
 
-  // "colonne" e "righe" sono comuni a entrambi i tool: lette una volta sola
-  // qui, prima di smistare su quale file generare.
+  // "colonne" e "righe" sono comuni ai due tool: lette qui prima di smistare.
   try
     LDefinizioni := LeggiDefinizioniColonne(AArguments);
     LRighe := LeggiRighe(AArguments);
   except
     on E: Exception do
-      // Errore di formato imputabile a chi ha costruito la chiamata (il
-      // modello): .Error (isError=true), non un'eccezione che si propaga
-      // come errore di trasporto - il modello vede il messaggio e puo'
-      // correggere la chiamata al turno successivo.
+      // Formato errato imputabile al modello: .Error, non un'eccezione, cosi' puo'
+      // correggere la chiamata.
       Exit(TMCPToolResult.Error(E.Message));
   end;
 
@@ -496,10 +363,7 @@ begin
       LNomeFile := CostruisciNomeFileUnico(NomeFileRichiesto(AArguments, 'export'), 'csv');
       LPercorsoFile := TPath.Combine(TConfig.GetInstance.ExportFolder, LNomeFile);
 
-      // TEncoding.UTF8 scrive anche il preambolo BOM: senza, Excel (il
-      // consumatore piu' probabile di un CSV su Windows) puo' interpretare
-      // male gli accenti italiani nei dati (es. "qualita'" -> caratteri
-      // corrotti) aprendo il file con la codifica ANSI di default.
+      // Con BOM: senza, Excel puo' leggere male gli accenti.
       TFile.WriteAllText(LPercorsoFile,
         TEsportazioneCSV.Costruisci<TJDOJsonObject>(CostruisciColonneCSV(LDefinizioni), LRighe),
         TEncoding.UTF8);
@@ -514,45 +378,27 @@ begin
           AArguments.S['titolo'], CostruisciColonnePDF(LDefinizioni), LRighe));
     end
     else
-      // Non dovrebbe succedere (TMCPServer.RegisterDynamicProvider dispatcha
-      // solo i nomi restituiti da GetDynamicToolDefs), ma un fallback
-      // esplicito e' piu' sicuro di un case senza else.
+      // Non dovrebbe succedere (si dispatchano solo i nomi di GetDynamicToolDefs), ma
+      // meglio un fallback esplicito.
       Exit(TMCPToolResult.Error(Format(
         '"%s" non e'' un tool gestito da questo provider.', [AToolName])));
   except
     on E: Exception do
-      // Errore di scrittura su disco (permessi, spazio esaurito, cartella
-      // di export rimossa a runtime, ecc.): non e' colpa del modello, ma va
-      // comunque restituito come .Error (isError=true) e non lasciato
-      // propagare - un'eccezione non gestita qui diventerebbe un errore di
-      // trasporto JSON-RPC generico, molto meno utile in chat di un
-      // messaggio che spiega cosa e' andato storto.
+      // Errore di scrittura (permessi, spazio, cartella rimossa): non e' colpa del modello,
+      // ma va restituito come .Error e non propagato come errore di trasporto generico.
       Exit(TMCPToolResult.Error('Impossibile generare il file: ' + E.Message));
   end;
 
-  // URL reale (non un'etichetta simbolica): TMVCStaticFilesMiddleware serve
-  // ExportFolder su /export (vedi uWebModule.pas), quindi questo link
-  // funziona per davvero in un browser o in qualunque client che lo mostri.
-  // TMCPToolResult.Text (non .Resource/.ResourceBlob): il contenuto non e'
-  // piu' embedded, quindi non c'e' nulla da incorporare come risorsa - solo
-  // un messaggio testuale con l'URL, che qualunque client MCP puo' riportare
-  // in chat cosi' com'e' (vedi nota in testa alla unit sul perche' di questa
-  // scelta rispetto alla prima versione con Resource/ResourceBlob).
+  // URL reale: TMVCStaticFilesMiddleware serve ExportFolder su /export (uWebModule.pas).
+  // Solo testo (.Text), senza Resource: vedi la nota in testa.
   LUrlDownload := TConfig.GetInstance.BaseUrl + '/export/' + LNomeFile;
   Result := TMCPToolResult.Text(Format(
     'File generato con successo: %s'#10'Link per il download: %s',
     [LNomeFile, LUrlDownload]));
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTI DEI TOOL DI QUESTO PROVIDER (tappa 2 del porting del pianificatore,
-// vedi agente_ai/tool/uContrattiTool.pas). Portati da mcp_delphi.py del prototipo:
-// DEFINIZIONI (output_schema, effetto, conferma), INTEGRAZIONI_INPUT (vincoli
-// sugli input) e ALMENO_UNO. Gli schemi di output descrivono le risposte
-// costruite piu' sopra in questa unit: se cambia una risposta, va cambiato
-// anche il suo schema qui sotto. Il test scripts/prototipo_pianificatore/tests/
-// test_contratti_delphi.py li confronta con quelli del prototipo.
-// ---------------------------------------------------------------------------
+// Contratti (vedi uContrattiTool.pas). Gli schemi di output descrivono le risposte
+// costruite sopra: se cambia una risposta, va cambiato anche lo schema.
 
 const
   SCHEMA_OUTPUT_GENERATE_CSV =

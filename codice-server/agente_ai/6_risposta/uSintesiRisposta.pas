@@ -1,31 +1,16 @@
 unit uSintesiRisposta;
 
-(* ============================================================================
-  RISPOSTA PER L'UTENTE - tappa 10 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/synthesizer.py,
-  piu' i testi fissi decisi nel piano di lavoro del 02/10.
-
-  -- Due modi di rispondere ----------------------------------------------------
-  1. SINTESI (una chiamata al modello, senza tool e senza schema): quando il
-     piano ha LETTO dei dati, o si e' fermato per un motivo che va spiegato
-     (errore di un tool, nessun elemento trovato, passo non coperto). Il
-     modello non decide niente: riceve la richiesta e cio' che e' stato
-     eseguito (passi, argomenti, esiti, risultati) e lo racconta. Deve
-     basarsi SOLO su quei risultati.
-  2. TESTO FISSO (nessuna chiamata al modello): quando non c'e' niente da
-     raccontare e una frase sbagliata farebbe danno:
-       - richiesta di conferma di una scrittura;
-       - richiesta di scelta fra candidati (disambiguazione);
-       - piano non valido;
-       - operazione annullata.
-     Nel prototipo anche questi casi passavano dal modello; qui li scrive il
-     codice, cosi' l'utente non puo' leggere "ho aperto la non conformita'"
-     quando il sistema sta solo chiedendo conferma.
-
-  Come le altre unit del pianificatore, questa non chiama il modello: prepara
-  la richiesta per TClientLLM.Completa. I risultati inseriti nel messaggio
-  sono ridotti (array troncati a 50 elementi) per non superare il contesto.
-  ============================================================================ *)
+// Risposta per l'utente, in due modi.
+// 1. SINTESI (una chiamata al modello, senza tool e senza schema): quando il piano ha letto
+// dei dati o si e' fermato per un motivo da spiegare (errore di un tool, nessun elemento
+// trovato, passo non coperto). Il modello riceve la richiesta e cio' che e' stato eseguito
+// (passi, argomenti, esiti, risultati) e lo racconta, basandosi solo su quei risultati.
+// 2. TESTO FISSO (nessuna chiamata al modello): conferma di una scrittura, scelta fra
+// candidati, piano non valido, operazione annullata. Lo scrive il codice, cosi' l'utente
+// non legge "ho aperto la non conformita'" quando il sistema sta solo chiedendo conferma.
+// Questa unit non chiama il modello: prepara la richiesta per TClientLLM.Completa. I
+// risultati nel messaggio sono ridotti (array troncati a 50 elementi) per non superare il
+// contesto.
 
 interface
 
@@ -113,8 +98,6 @@ begin
     Result := JSONComePython(AValore);
 end;
 
-{ TSintesiRisposta }
-
 class function TSintesiRisposta.RichiestaSintesi(const ADomanda, AOggi: string; APiano: TPiano;
   AEsecuzione: TEsitoEsecuzione; AArrestoPreventivo: TJSONObject): TJSONObject;
 var
@@ -127,19 +110,15 @@ var
   LCoppiaTolta: TJSONPair;
   i, j: Integer;
 const
-  // TETTO DI GRANDEZZA dei dati mandati al Synthesizer (argomenti e risultati
-  // di tutti i passi insieme), in caratteri. Con un turno che produce molti
-  // elementi lunghi (es. l'anteprima di 15 email di richiamo: i messaggi
-  // compaiono negli argomenti E nel risultato) il prompt superava il contesto
-  // del modello e LM Studio rispondeva 400: i tool erano stati eseguiti, ma
-  // l'utente riceveva un errore (run delphi_20261004_114744, caso S1-G).
-  // 24000 caratteri sono circa 7-8 mila token: resta spazio per il resto del
-  // prompt e per la risposta in un contesto da 16384.
+  // Tetto in caratteri ai dati mandati alla sintesi (argomenti e risultati di tutti i
+  // passi). Senza tetto, un turno con molti elementi lunghi (es. l'anteprima di 15 email,
+  // che compaiono negli argomenti e nel risultato) superava il contesto del modello e il
+  // server rispondeva 400, con i tool gia' eseguiti. 24000 caratteri sono circa 7-8 mila
+  // token: resta spazio per il resto del prompt e la risposta in un contesto da 16384.
   MAX_CARATTERI_DATI_SINTESI = 24000;
-  // Sopra il tetto gli array si accorciano per gradi: prima 10 elementi,
-  // poi 3, poi 1. Accanto a ogni array accorciato resta "<nome>__totale",
-  // quindi il modello sa quanti erano e puo' dirlo. I dati completi li ha
-  // comunque il frontend (campo tool_calls della risposta).
+  // Sopra il tetto gli array si accorciano per gradi: prima 10 elementi, poi 3, poi 1.
+  // Accanto resta "<nome>__totale", cosi' il modello sa quanti erano. I dati completi li ha
+  // comunque il frontend (campo tool_calls).
   RIDUZIONI: array[0..2] of Integer = (10, 3, 1);
 begin
   LDati := TJSONObject.Create;
@@ -193,9 +172,8 @@ begin
           LVoce.AddPair('output', TJSONNull.Create);
       end;
 
-    // Applicazione del tetto (vedi MAX_CARATTERI_DATI_SINTESI). Nel caso
-    // normale il primo controllo e' gia' sotto il limite e non cambia nulla:
-    // il comportamento resta quello di prima.
+    // Applicazione del tetto (vedi MAX_CARATTERI_DATI_SINTESI): se i dati sono gia' sotto
+    // il limite non cambia nulla.
     if AEsecuzione <> nil then
       for j := Low(RIDUZIONI) to High(RIDUZIONI) do
       begin

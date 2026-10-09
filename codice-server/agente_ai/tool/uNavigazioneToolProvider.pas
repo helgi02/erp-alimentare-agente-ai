@@ -1,48 +1,18 @@
 ﻿unit uNavigazioneToolProvider;
 
-(* ============================================================================
-  TNavigazioneToolProvider — tool MCP generico apri_vista: permette al
-  modello di segnalare "apri questa schermata del gestionale, per questa
-  entita'", senza che questo file sappia nulla di ricette, vendite o
-  ritiro/richiamo.
-
-  ── Perche' e' un tool "dinamico" (come TFilesToolsProvider) ────────────────
-  I parametri "vista" (string) e "motivo" (string) sarebbero esprimibili
-  anche come argomenti Pascal via RTTI ([MCPTool]/[MCPParam], vedi
-  TVenditeToolProvider), ma "parametri" no: e' un oggetto la cui FORMA
-  (quali chiavi contiene) dipende da QUALE vista e' stata scelta — non c'e'
-  un tipo Pascal fisso dietro. Per questo, come generate_csv/generate_pdf,
-  il tool si dichiara con GetDynamicToolDefs e si esegue con InvokeDynamic,
-  leggendo "arguments" a mano con l'API di JsonDataObjects.
-
-  ── Da dove viene sapere QUALI viste esistono ───────────────────────────────
-  Da TRegistroViste (common/uRegistroViste.pas), popolato ESPLICITAMENTE in
-  uFrmMain.FormCreate da ciascun tool provider di scenario che possiede una
-  vista sensata da aprire (non tutti: e' il singolo provider a deciderlo in
-  base al proprio dominio, vedi commento in testa a uRegistroViste.pas).
-  Questo file legge SOLO quel registro, sia per costruire la descrizione del
-  tool (cosi' il modello sa quali nomi di vista sono validi e cosa serve per
-  ciascuna) sia per validare la richiesta in InvokeDynamic — stessa fonte
-  per le due cose, per costruzione non possono disallinearsi.
-
-  Finche' nessun tool provider di scenario registra ancora una vista (cioe'
-  finche' TRicetteToolProvider, che possiedera' 'ricetta_prodotto_finito',
-  non esiste), questo tool e' gia' presente e funzionante ma il registro e'
-  vuoto: qualunque chiamata restituisce l'errore "nessuna vista disponibile"
-  invece di un crash — comportamento corretto, non un bug.
-
-  ── Cosa fa DAVVERO Execute (poco) ──────────────────────────────────────────
-  Nessuna logica applicativa, nessun accesso al DB: solo validazione (la
-  vista richiesta esiste? i parametri obbligatori per quella vista ci sono
-  tutti?) e poi eco della richiesta in un tool_result JSON. La vera
-  navigazione la esegue il FRONTEND, leggendo il campo tool_calls della
-  risposta finale (stato "concluso") di POST /api/ai/turni/passo (vedi AIAgentControllerU e il
-  commento li' sopra su tool_calls) e trovandoci una chiamata ad apri_vista
-  con esito "ok": e' un segnale che attraversa la stessa risposta HTTP
-  gia' usata per il testo della conversazione, non serve un canale a parte
-  (nessun websocket/push: la conversazione e' gia' request/response
-  sincrona all'interno dello stesso giro).
-  ============================================================================ *)
+// Tool MCP generico apri_vista: il modello chiede di aprire una schermata del gestionale
+// per un'entita', senza che questo file sappia nulla di ricette o vendite.
+// Provider dinamico: "vista" e "motivo" sarebbero RTTI, ma "parametri" e' un oggetto la cui
+// forma dipende dalla vista scelta, quindi non ha un tipo Pascal fisso (GetDynamicToolDefs
+// + InvokeDynamic).
+// Le viste valide vengono solo da TRegistroViste (popolato in FormCreate dai provider di
+// scenario). La stessa fonte serve per la descrizione del tool e per la validazione, quindi
+// non possono disallinearsi. Con il registro vuoto ogni chiamata restituisce "nessuna vista
+// disponibile": corretto, non un bug.
+// Execute non ha logica ne' accesso al DB: valida la vista e i parametri obbligatori e fa
+// eco della richiesta. La navigazione la fa il frontend, leggendo tool_calls nella risposta
+// "concluso" di POST /api/ai/turni/passo: serve una chiamata ad apri_vista con esito "ok",
+// senza un canale separato.
 
 interface
 
@@ -59,19 +29,15 @@ type
     function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; override;
     function InvokeDynamic(const AToolName: string;
       AArguments: TJDOJsonObject): TMCPToolResult; override;
-    // Contratti dei tool di questo provider per il pianificatore: schema del
-    // risultato, lettura/scrittura, conferma, vincoli sugli input (vedi
-    // agente_ai/tool/uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratti dei tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
 implementation
 
-{ Funzioni di supporto, private all'unit }
-
-// Elenco dei nomi di vista registrati, separati da virgola — usato sia nella
-// descrizione del tool sia nei messaggi di errore di InvokeDynamic, cosi'
-// il modello vede sempre gli stessi nomi validi in entrambi i posti.
+// Nomi di vista registrati, separati da virgola: stessi nomi nella descrizione del tool e
+// negli errori.
 function ElencoNomiViste: string;
 var
   LViste: TArray<TDefinizioneVista>;
@@ -89,9 +55,7 @@ begin
   Result := string.Join(', ', LNomi);
 end;
 
-// Una riga descrittiva per vista, con le sue chiavi richieste — righe unite
-// da GetDynamicToolDefs per formare la parte "elenco viste" della
-// descrizione del tool.
+// Una riga per vista con le chiavi richieste, per la descrizione del tool.
 function DescriviVista(const AVista: TDefinizioneVista): string;
 var
   LChiaviTesto: string;
@@ -105,9 +69,7 @@ begin
     [AVista.Nome, AVista.Descrizione, LChiaviTesto]);
 end;
 
-// Le chiavi di ADefinizione.ChiaviRichieste assenti in AParametri, nell'ordine
-// in cui compaiono nella definizione — usata da InvokeDynamic per costruire
-// un messaggio di errore puntuale invece di un generico "parametri non validi".
+// Chiavi richieste assenti in AParametri, per un errore puntuale.
 function ChiaviMancanti(const ADefinizione: TDefinizioneVista;
   AParametri: TJDOJsonObject): TArray<string>;
 var
@@ -121,8 +83,6 @@ begin
 
   Result := LMancanti;
 end;
-
-{ TNavigazioneToolProvider }
 
 function TNavigazioneToolProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
 
@@ -224,14 +184,9 @@ begin
       'Parametri mancanti per la vista "%s": %s.',
       [LNomeVista, string.Join(', ', LMancanti)])));
 
-  // Nessuna scrittura, nessun accesso al DB: solo eco della richiesta gia'
-  // validata. "parametri" viene ricostruito da testo (Parse su ToJSON)
-  // invece di essere riassegnato per riferimento: LParametri appartiene ad
-  // AArguments (di proprieta' del chiamante), stesso principio "si passa
-  // per il testo fra oggetti JSON di proprieta' diverse" gia' seguito in
-  // uMCPBridge fra System.JSON e JsonDataObjects — qui evita che due
-  // oggetti (AArguments e LRisultato) finiscano a condividere lo stesso
-  // sotto-oggetto con proprietari diversi.
+  // Nessuna scrittura: eco della richiesta validata. "parametri" e' ricostruito da testo
+  // (Parse su ToJSON) perche' appartiene ad AArguments: riassegnarlo farebbe condividere lo
+  // stesso sotto-oggetto a due proprietari.
   LRisultato := TJDOJsonObject.Create;
   try
     LRisultato.S['esito'] := 'ok';
@@ -246,15 +201,8 @@ begin
   end;
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTI DEI TOOL DI QUESTO PROVIDER (tappa 2 del porting del pianificatore,
-// vedi agente_ai/tool/uContrattiTool.pas). Portati da mcp_delphi.py del prototipo:
-// DEFINIZIONI (output_schema, effetto, conferma), INTEGRAZIONI_INPUT (vincoli
-// sugli input) e ALMENO_UNO. Gli schemi di output descrivono le risposte
-// costruite piu' sopra in questa unit: se cambia una risposta, va cambiato
-// anche il suo schema qui sotto. Il test scripts/prototipo_pianificatore/tests/
-// test_contratti_delphi.py li confronta con quelli del prototipo.
-// ---------------------------------------------------------------------------
+// Contratti (vedi uContrattiTool.pas). Gli schemi di output descrivono le risposte
+// costruite sopra: se cambia una risposta, va cambiato anche lo schema.
 
 const
   SCHEMA_OUTPUT_APRI_VISTA =

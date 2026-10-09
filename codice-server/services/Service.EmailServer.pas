@@ -1,38 +1,15 @@
 unit Service.EmailServer;
 
-(* ============================================================================
-  TEmailServer - invio di una email (corpo HTML + un allegato facoltativo) via
-  SMTP, con i componenti Indy.
-
-  -- Configurazione ----------------------------------------------------------
-  I parametri SMTP NON si leggono qui: arrivano da TConfig (common/uConfig.pas,
-  record TConfigSMTP), che li carica una volta all'avvio dalla sezione [SMTP]
-  dello stesso ini del server (AziendaAlimentareERP.ini), come gia' avviene
-  per [Database] e [LLM]:
-
-      [SMTP]
-      Host=smtp.gmail.com
-      Port=465
-      Username=nome@dominio.it
-      Password=password-per-le-app
-      FromName=Nome Cognome
-      FromAddress=nome@dominio.it
-
-  Un solo punto che legge l'ini = un solo posto in cui cercare se l'invio non
-  funziona, e nessun file riaperto a ogni email.
-
-  -- Errori ------------------------------------------------------------------
-  InviaConAllegato non solleva eccezioni: restituisce False e mette il motivo
-  in AErrore. Chi la chiama (un tool MCP) puo' cosi' trasformarlo in un
-  errore del tool leggibile dal modello.
-
-  -- Limiti noti (sviluppi futuri, vedi il documento sulla sicurezza) --------
-  - il certificato del server SMTP non viene verificato (VerifyMode = []);
-  - la password sta in chiaro nell'ini, come quella del database;
-  - l'invio e' sincrono: la richiesta HTTP aspetta la risposta del server SMTP.
-  Servono le DLL di OpenSSL 1.0.2 (libeay32.dll, ssleay32.dll) accanto
-  all'eseguibile, della stessa architettura (64 bit).
-  ============================================================================ *)
+// Invio di una email (corpo HTML + un allegato facoltativo) via SMTP con Indy.
+// I parametri non si leggono qui: arrivano da TConfig (TConfigSMTP), caricati una volta
+// all'avvio dalla sezione [SMTP] dell'ini (Host, Port, Username, Password, FromName,
+// FromAddress). Un solo punto che legge l'ini, nessun file riaperto a ogni email.
+// InviaConAllegato non solleva eccezioni: restituisce False e il motivo in AErrore, cosi'
+// un tool MCP lo trasforma in un errore leggibile dal modello.
+// Limiti noti (sviluppi futuri, vedi il documento sulla sicurezza): il certificato SMTP non
+// e' verificato (VerifyMode = []); la password e' in chiaro nell'ini; l'invio e' sincrono.
+// Servono le DLL OpenSSL 1.0.2 (libeay32.dll, ssleay32.dll) a 64 bit accanto
+// all'eseguibile.
 
 interface
 
@@ -47,7 +24,7 @@ uses
   IdText;
 
 type
-  // Allegato tenuto in memoria. Contenuto vuoto = nessun allegato.
+  // Allegato in memoria. Contenuto vuoto = nessun allegato.
   TEmailAllegato = record
     NomeFile   : string;
     ContentType: string;   // es. 'application/pdf'
@@ -56,16 +33,13 @@ type
 
   TEmailServer = class
   public
-    // True se la sezione [SMTP] dell'ini ha almeno Host e FromAddress.
-    // AMotivo spiega che cosa manca.
+    // True se [SMTP] ha almeno Host e FromAddress; AMotivo dice cosa manca.
     class function Configurato(out AMotivo: string): Boolean;
 
-    // Controllo di FORMA di un indirizzo: una sola @, qualcosa prima, un
-    // dominio con almeno un punto dopo. Non garantisce che la casella
-    // esista; ferma i valori che un indirizzo non sono (un nome, un id) e i
-    // caratteri con cui si potrebbero aggiungere altri destinatari o altre
-    // intestazioni al messaggio (virgola, punto e virgola, a capo). Usato
-    // sia dai tool MCP sia dall'endpoint /api/email/invio.
+    // Controllo di forma: una sola @, qualcosa prima, un dominio con un punto dopo. Non
+    // garantisce che la casella esista; ferma valori che non sono indirizzi (un nome, un
+    // id) e i caratteri con cui si aggiungerebbero destinatari o intestazioni (virgola,
+    // punto e virgola, a capo). Usato dai tool MCP e da /api/email/invio.
     class function IndirizzoValido(const AIndirizzo: string): Boolean;
 
     class function InviaConAllegato(
@@ -82,8 +56,8 @@ uses
   System.JSON,
   uConfig;
 
-// Message-Id univoco: <GUID@dominio-del-mittente>. Il GUID evita collisioni
-// fra email inviate nello stesso millisecondo da thread diversi.
+// Message-Id <GUID@dominio-del-mittente>: il GUID evita collisioni fra thread nello stesso
+// millisecondo.
 function NuovoMessageId(const AIndirizzoMittente: string): string;
 var
   LDominio, LGuid: string;
@@ -100,15 +74,12 @@ begin
 end;
 
 var
-  // Protegge il file delle email simulate: gli invii arrivano da thread
-  // diversi (una richiesta HTTP per thread).
+  // Protegge il file delle email simulate: gli invii arrivano da thread diversi.
   GLockEmailSimulate: TCriticalSection;
 
-// [SMTP] Simula=1: invece di spedire, aggiunge una riga JSON a
-// logs\email_simulate.jsonl accanto all'eseguibile (data, destinatario,
-// oggetto, corpo). Serve a provare l'intero flusso - batteria di test
-// compresa - senza che parta nulla, e a controllare dopo che cosa sarebbe
-// partito.
+// [SMTP] Simula=1: invece di spedire, aggiunge una riga JSON a logs\email_simulate.jsonl
+// (data, destinatario, oggetto, corpo). Per provare il flusso senza inviare nulla e
+// controllare cosa sarebbe partito.
 procedure RegistraEmailSimulata(const ADestinatario, AOggetto, ACorpoHtml: string);
 var
   LCartella: string;
@@ -161,7 +132,7 @@ var
   LSMTPConfig: TConfigSMTP;
 begin
   LSMTPConfig := TConfig.GetInstance.SMTP;
-  // In simulazione non serve nessun server SMTP.
+  // In simulazione non serve un server SMTP.
   Result := LSMTPConfig.Simula or
     ((LSMTPConfig.Host <> '') and (LSMTPConfig.FromAddress <> ''));
   if Result then
@@ -187,15 +158,15 @@ var
 begin
   Result := False;
 
-  // Prima di creare qualunque oggetto: senza configurazione il messaggio
-  // d'errore deve dire "manca [SMTP]", non un generico errore di connessione.
+  // Prima di creare oggetti: senza configurazione l'errore deve dire "manca [SMTP]", non un
+  // generico errore di connessione.
   if not Configurato(AErrore) then
     Exit;
 
-  // Copia letta UNA volta: tutto l'invio lavora sugli stessi valori.
+  // Copia letta una volta: tutto l'invio usa gli stessi valori.
   LSMTPConfig := TConfig.GetInstance.SMTP;
 
-  // Protezioni per prove e dimostrazioni (vedi TConfigSMTP in uConfig.pas).
+  // Protezioni per prove e dimostrazioni (TConfigSMTP).
   if LSMTPConfig.Simula then
   begin
     RegistraEmailSimulata(ADestinatario, AOggetto, ACorpoHtml);
@@ -216,28 +187,24 @@ begin
   LStream := TMemoryStream.Create;
   try
     try
-      // --- SSL / TLS ---
       LSSL.SSLOptions.Method      := sslvTLSv1_2;
       LSSL.SSLOptions.Mode        := sslmClient;
       LSSL.SSLOptions.VerifyMode  := [];
       LSSL.SSLOptions.VerifyDepth := 0;
 
-      // --- Parametri SMTP (sezione [SMTP] dell'ini, via TConfig) ---
       LSMTP.IOHandler := LSSL;
       LSMTP.Host      := LSMTPConfig.Host;
       LSMTP.Port      := LSMTPConfig.Port;
       LSMTP.Username  := LSMTPConfig.Username;
       LSMTP.Password  := LSMTPConfig.Password;
 
-      // La porta decide il tipo di TLS: 465 = cifrato dal primo byte
-      // (implicito); 587 o 25 = connessione in chiaro che passa a TLS con
-      // il comando STARTTLS (esplicito).
+      // La porta decide il TLS: 465 = implicito (cifrato dal primo byte); 587 o 25 = in
+      // chiaro, poi STARTTLS.
       if LSMTPConfig.Port = 465 then
         LSMTP.UseTLS := utUseImplicitTLS
       else
         LSMTP.UseTLS := utUseExplicitTLS;
 
-      // --- Intestazione messaggio ---
       LMsg.From.Name    := LSMTPConfig.FromName;
       LMsg.From.Address := LSMTPConfig.FromAddress;
       LMsg.Subject      := LOggetto;
@@ -246,28 +213,23 @@ begin
       LMsg.Recipients.EMailAddresses := LDestinatario;
       LMsg.MsgId        := NuovoMessageId(LSMTPConfig.FromAddress);
 
-      // --- Corpo HTML ---
       LHtml := TIdText.Create(LMsg.MessageParts);
       LHtml.ContentType := 'text/html; charset=UTF-8';
       LHtml.CharSet     := 'UTF-8';
       LHtml.Body.Text   := ACorpoHtml;
 
-      // --- Allegato da memoria ---
       if Length(AAllegato.Contenuto) > 0 then
       begin
         LStream.WriteBuffer(AAllegato.Contenuto[0], Length(AAllegato.Contenuto));
         LStream.Position := 0;
-        // TIdAttachmentMemory COPIA il contenuto di LStream in un proprio
-        // stream interno: non ne diventa proprietario. LStream resta
-        // quindi nostro e va liberato nel finally (prima non veniva
-        // liberato: a ogni email con allegato restava occupata memoria).
+        // TIdAttachmentMemory copia il contenuto di LStream senza esserne proprietario:
+        // LStream resta nostro e va liberato nel finally.
         LMem := TIdAttachmentMemory.Create(LMsg.MessageParts, LStream);
         LMem.FileName        := AAllegato.NomeFile;
         LMem.ContentType     := AAllegato.ContentType;
         LMem.ContentTransfer := 'base64';
       end;
 
-      // --- Invio (sincrono) ---
       LSMTP.Connect;
       try
         LSMTP.Send(LMsg);

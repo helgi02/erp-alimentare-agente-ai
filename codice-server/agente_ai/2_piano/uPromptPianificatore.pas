@@ -1,17 +1,9 @@
 ﻿unit uPromptPianificatore;
 
-// ============================================================================
-// UNIT GENERATA - NON MODIFICARE A MANO.
-// Testi dei prompt del pianificatore, ricavati da
-//   scripts/prototipo_pianificatore/pianificatore/prompt.py
-// con lo script scripts/prototipo_pianificatore/tests/genera_prompt_delphi.py.
-// Per cambiare un testo: modificare prompt.py, rilanciare lo script, ricompilare.
-// Testi: run conv_20261001_235839 (49/56 turni corretti) + variante v1 del 05/10/2026
-// (regola 1 con l'elenco di cio' che il gestionale gestisce + esempio sugli allergeni).
-// Le righe finiscono con #10 (LF), come nel prototipo. File in UTF-8 con BOM:
-// le lettere accentate dei testi devono arrivare al modello cosi' come sono.
+// Unit generata: non modificare a mano. Testi dei prompt del pianificatore.
+// Le righe finiscono con #10 (LF). File in UTF-8 con BOM: le lettere accentate devono
+// arrivare al modello com'e'.
 // Come i pezzi si compongono: vedi agente_ai/2_piano/uPianificatore.pas.
-// ============================================================================
 
 interface
 
@@ -123,7 +115,7 @@ const
     #10 +
     'SCHEMI DEI TOOL CANDIDATI:';
 
-  // Compito del Synthesizer (tappa 10).
+  // Compito del Synthesizer.
   PROMPT_SEZIONE_SINTESI =
     #10 +
     'COMPITO: RISPONDERE ALL''UTENTE'#10 +

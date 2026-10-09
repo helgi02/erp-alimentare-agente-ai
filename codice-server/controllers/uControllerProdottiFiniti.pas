@@ -13,18 +13,10 @@ uses
   uModelAllergene;
 
 type
-  // Controller CRUD per l'anagrafica prodotti finiti (tabella
-  // anagrafiche_prodotti_finiti). Stessa struttura di
-  // TControllerMateriePrime, allergeni compresi: gli allergeni
-  // dichiarati sono la stessa relazione many-to-many (qui la tabella
-  // ponte e' anagrafiche_prodotti_finiti_allergeni) e restano nidificati
-  // sotto /($id)/allergeni perche' appartengono a QUEL prodotto, non
-  // sono un'anagrafica a se'.
-  //
-  // Sul prodotto finito gli allergeni pesano piu' che sulla materia
-  // prima: sono il dato che finisce in etichetta ai sensi del Reg. UE
-  // 1169/2011, ed e' quello che lo scenario 3 (adattamento ricetta)
-  // deve poter verificare.
+  // CRUD dell'anagrafica prodotti finiti, come TControllerMateriePrime. Gli allergeni
+  // (tabella ponte anagrafiche_prodotti_finiti_allergeni) restano sotto /($id)/allergeni.
+  // Sul prodotto finito pesano di piu': finiscono in etichetta (Reg. UE 1169/2011) e lo
+  // scenario 3 deve verificarli.
   [MVCPath('/api/prodotti-finiti')]
   TControllerProdottiFiniti = class(TMVCController)
   public
@@ -58,8 +50,6 @@ type
   end;
 
 implementation
-
-{ TControllerProdottiFiniti }
 
 procedure TControllerProdottiFiniti.GetAll(ctx: TWebContext);
 var
@@ -159,9 +149,8 @@ begin
   try
     try
       LProdotto.FromJSONObject(LJSON);
-      // L'ID resta quello dell'URL: e' l'URL a identificare la risorsa,
-      // non il corpo della richiesta. Cosi' un id diverso nel JSON non
-      // puo' far aggiornare per sbaglio un altro record.
+      // L'ID e' quello dell'URL, non del corpo: un id diverso nel JSON non puo' aggiornare
+      // un altro record.
       LProdotto.ID := LID;
       LProdotto.Update;
 
@@ -193,9 +182,8 @@ begin
     Context.Response.StatusCode := HTTP_STATUS.NoContent;
   except
     on E: Exception do
-      // Tipicamente una violazione di foreign key: il prodotto e' gia'
-      // usato in ricette, lotti o righe d'ordine. Non e' un errore del
-      // server ma un conflitto con dati esistenti, da cui il 409.
+      // Tipicamente una FK violata: il prodotto e' usato in ricette, lotti o righe
+      // d'ordine. Conflitto con dati esistenti, quindi 409.
       Render(HTTP_STATUS.Conflict,
         'Impossibile eliminare il prodotto finito: ' + E.Message);
   end;
@@ -231,9 +219,7 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // Il corpo atteso e' un array di id allergene: [1, 4, 7].
-  // Sostituzione integrale, non aggiunta: e' un PUT, quindi il corpo
-  // descrive lo stato finale della relazione.
+  // Array di id allergene, es. [1, 4, 7]. Sostituzione integrale: e' un PUT.
   LJSON := TJSONObject.ParseJSONValue(ctx.Request.Body);
   if not (LJSON is TJSONArray) then
   begin

@@ -9,21 +9,13 @@ uses
   DbU;
 
 type
-  // Rappresenta un lotto fisico di prodotto finito pronto per la vendita
-  // (tabella lotti_prodotti_finiti). Struttura identica a
-  // TLottoSemilavorato con l'aggiunta di DataScadenza: a differenza dei
-  // semilavorati, il prodotto finito raggiunge lo scaffale/il
-  // consumatore e la sua scadenza effettiva e' un dato di legge
-  // (etichetta) — puo' differire dal calcolo standard dell'anagrafica
-  // (ProdottoFinito.GiorniScadenzaStandard), come segnalato nel commento
-  // della colonna nel DDL, per questo va salvata esplicitamente per
-  // ciascun lotto anziche' ricalcolata al volo.
-  //
-  // E' l'entita' piu' direttamente coinvolta nello scenario di
-  // ritiro/richiamo quando il lotto compromesso ha gia' raggiunto il
-  // magazzino prodotti finiti: da qui si arriva a ordini_vendita_righe
-  // (tramite lotto_prodotto_finito_id) per sapere quali clienti hanno
-  // gia' ricevuto il lotto.
+  // Lotto di prodotto finito pronto per la vendita (lotti_prodotti_finiti). Come
+  // TLottoSemilavorato, piu' DataScadenza: e' un dato di legge (etichetta) e puo' differire
+  // dal calcolo standard (GiorniScadenzaStandard), quindi si salva per ogni lotto invece di
+  // ricalcolarla.
+  // E' l'entita' piu' coinvolta nel richiamo quando il lotto e' gia' in magazzino: da qui
+  // (lotto_prodotto_finito_id) si arriva a ordini_vendita_righe per sapere quali clienti
+  // l'hanno ricevuto.
   TLottoProdottoFinito = class
   private
     FID: Integer;
@@ -54,12 +46,9 @@ type
     property RicettaID: Integer read FRicettaID write FRicettaID;
     property StabilimentoID: Integer read FStabilimentoID write FStabilimentoID;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_lotti_prodotti_finiti_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TLottoProdottoFinito;
     class function GetByCodiceLotto(AProdottoFinitoID: Integer;
       const ACodiceLotto: string): TLottoProdottoFinito;
@@ -83,8 +72,6 @@ const
     'data_scadenza, quantita, quantita_disponibile, unita_misura, ' +
     'ricetta_id, stabilimento_id, creato_il, aggiornato_il ' +
     'FROM lotti_prodotti_finiti ';
-
-{ TLottoProdottoFinito }
 
 constructor TLottoProdottoFinito.Create;
 begin
@@ -132,8 +119,7 @@ class function TLottoProdottoFinito.GetByCodiceLotto(AProdottoFinitoID: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // Il codice lotto e' univoco solo all'interno dello stesso prodotto
-  // finito (vincolo uq_lotto_prodotto_finito), non globalmente.
+  // Il codice lotto e' univoco solo per prodotto finito (uq_lotto_prodotto_finito).
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -158,7 +144,7 @@ var
 begin
   Result := TObjectList<TLottoProdottoFinito>.Create(True); // possiede gli oggetti
 
-  // Ordinamento FEFO per data_scadenza, come per TLottoMateriaPrima.
+  // Ordine FEFO per data_scadenza, come TLottoMateriaPrima.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'ORDER BY data_scadenza');
   try
@@ -179,10 +165,8 @@ var
   LAutoQuery: TAutoQuery;
   LLotto: TLottoProdottoFinito;
 begin
-  // Tutti i lotti di uno specifico prodotto finito, in ordine FEFO.
-  // E' il punto d'arrivo tipico dello scenario di ritiro/richiamo: dato
-  // un prodotto finito coinvolto, elenca i lotti da verificare uno per
-  // uno (giacenza residua vs. gia' consegnati a clienti).
+  // Lotti di un prodotto finito, in ordine FEFO: nel richiamo, i lotti da verificare uno
+  // per uno (giacenza residua vs gia' consegnati).
   Result := TObjectList<TLottoProdottoFinito>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -204,11 +188,8 @@ end;
 
 class function TLottoProdottoFinito.Delete(AID: Integer): Boolean;
 begin
-  // Un lotto di prodotto finito e' referenziato da
-  // consumi_produzione_prodotti_finiti, ordini_vendita_righe e
-  // non_conformita: in assenza di ON DELETE CASCADE lato DB, la query
-  // fallisce se il lotto e' gia' stato venduto o coinvolto in una non
-  // conformita'. Comportamento voluto.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM lotti_prodotti_finiti WHERE id = :id', [AID]);
 end;
@@ -217,13 +198,7 @@ function TLottoProdottoFinito.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
-  // Come per TLottoMateriaPrima/TLottoSemilavorato: il DB ha DEFAULT 0 su
-  // quantita_disponibile solo come garanzia di NOT NULL. Per un lotto
-  // appena prodotto la regola di business e' QuantitaDisponibile =
-  // Quantita: e' responsabilita' del chiamante impostarla prima di
-  // chiamare Insert.
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO lotti_prodotti_finiti ' +
     '(prodotto_finito_id, codice_lotto, data_produzione, data_scadenza, ' +
@@ -247,8 +222,7 @@ function TLottoProdottoFinito.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_lotti_prodotti_finiti_aggiornato_il lo valorizza automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE lotti_prodotti_finiti SET prodotto_finito_id = :prodotto_finito_id, ' +
     'codice_lotto = :codice_lotto, data_produzione = :data_produzione, ' +
@@ -302,8 +276,7 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('prodotto_finito_id', LValInt) then
     FProdottoFinitoID := LValInt;
   if AJSON.TryGetValue<string>('codice_lotto', LValStr) then
@@ -319,8 +292,7 @@ begin
   if AJSON.TryGetValue<Integer>('stabilimento_id', LValInt) then
     FStabilimentoID := LValInt;
 
-  // Campi numerici decimali: letti come TJSONNumber per preservarne la
-  // precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita', LValNum) and (LValNum is TJSONNumber) then
     FQuantita := TJSONNumber(LValNum).AsDouble;
   if AJSON.TryGetValue<TJSONValue>('quantita_disponibile', LValNum) and (LValNum is TJSONNumber) then

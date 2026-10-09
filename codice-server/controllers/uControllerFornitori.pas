@@ -38,8 +38,6 @@ type
 
 implementation
 
-{ TControllerFornitori }
-
 procedure TControllerFornitori.GetAll(ctx: TWebContext);
 var
   LFornitori: TObjectList<TFornitore>;
@@ -84,10 +82,9 @@ var
   LFornitore: TFornitore;
   LBody: TJSONObject;
 begin
-  // ctx.Request.BodyAsJSONObject non esiste in TMVCWebRequest: si usa il
-  // parser JSON dell'RTL (System.JSON, gia' importato) sul body grezzo.
-  // ParseJSONValue restituisce nil se il body non e' JSON valido: il
-  // controllo subito dopo evita di passare nil a FromJSONObject.
+  // ctx.Request.BodyAsJSONObject non esiste in TMVCWebRequest: si usa il parser JSON
+  // dell'RTL sul body grezzo. ParseJSONValue da' nil se il body non e' JSON valido: il
+  // controllo successivo evita di passarlo a FromJSONObject.
   LBody := TJSONObject.ParseJSONValue(ctx.Request.Body) as TJSONObject;
   if LBody = nil then
   begin
@@ -100,7 +97,6 @@ begin
     try
       LFornitore.FromJSONObject(LBody);
 
-      // Validazione minima dei campi obbligatori
       if (LFornitore.RagioneSociale = '') or
          (LFornitore.PartitaIva = '') or
          (LFornitore.Email = '') then
@@ -143,8 +139,7 @@ var
 begin
   LID := ctx.Request.Params['id'].ToInteger;
 
-  // Vedi commento in TControllerFornitori.Create: BodyAsJSONObject non
-  // esiste in TMVCWebRequest, si usa il parser JSON dell'RTL.
+  // Vedi TControllerFornitori.Create (BodyAsJSONObject).
   LBody := TJSONObject.ParseJSONValue(ctx.Request.Body) as TJSONObject;
   if LBody = nil then
   begin

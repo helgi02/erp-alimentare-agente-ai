@@ -1,61 +1,27 @@
 unit uEmailToolProvider;
 
-(* ============================================================================
-  TEmailToolProvider - tool MCP per le email. Provider generico: non sa nulla
-  di clienti, lotti o richiami; riceve indirizzi e contenuti gia' decisi da
-  altri (l'utente, il modello, un altro tool) e li spedisce.
-
-  -- I tre tool --------------------------------------------------------------
-  1. invia_email (SCRITTURA con conferma)
-     Email LIBERA: oggetto e testo li scrive il modello. Un solo messaggio,
-     tutti i destinatari nel campo "A".
-  2. anteprima_email_da_modello (lettura)
-     Email a TESTO FISSO: compone, senza inviare, una email per ogni elemento
-     di "messaggi" a partire da un modello della tabella modelli_email
-     (services/uServiziModelliEmail.pas) e restituisce le bozze.
-  3. invia_email_da_modello (SCRITTURA con conferma)
-     Come il 2, ma invia: una email SEPARATA per ogni elemento (un
-     destinatario non vede gli altri).
-
-  -- Perche' due strade: libera e da modello ---------------------------------
-  Il testo libero va bene per un messaggio occasionale che l'utente rilegge.
-  Per le comunicazioni ufficiali (ritiro/richiamo) si e' scelto il testo
-  fisso: e' deterministico (stessa situazione = stesso testo), si modifica
-  nel database senza ricompilare ed e' classificato per categoria. Li' il
-  modello di linguaggio non scrive nulla: decide solo QUANDO chiamare i tool.
-
-  -- Come arrivano i "messaggi" ----------------------------------------------
-  Ogni elemento e' {"email", "modello", "variabili"}: a chi, con quale
-  modello, con quali valori per i segnaposto. Di norma non li scrive il
-  modello di linguaggio: li prepara un tool di dominio e il piano li passa
-  per riferimento, es.
-      "messaggi": "$1.comunicazioni"
-  (da trova_ordini_spedizioni_lotto_prodotto_finito). E' quel tool a
-  sapere quale modello tocca a quale cliente; qui si compone e si spedisce.
-
-  -- Correzioni dell'utente sull'anteprima ------------------------------------
-  Nella chat le bozze dell'anteprima sono MODIFICABILI. Le email corrette a
-  mano non ripassano da qui (invia_email_da_modello le ricomporrebbe dal
-  modello, perdendo le correzioni): il pulsante "Invia" del modulo chiama
-  direttamente POST /api/email/invio (controllers/uControllerEmail.pas).
-  invia_email_da_modello resta per l'invio chiesto a parole, senza modifiche.
-
-  -- Anteprima e invio danno lo stesso testo ---------------------------------
-  Entrambi passano da ComponiMessaggi: stessi messaggi + stesso modello =
-  stesso testo. Non serve salvare le bozze fra l'anteprima e l'invio.
-
-  -- Scritture con conferma --------------------------------------------------
-  I due tool di invio non scrivono nel database, ma hanno un effetto che non
-  si annulla e che esce dall'azienda: nel contratto sono etScrittura con
-  conferma, e il pianificatore si ferma prima di eseguirli.
-
-  -- Provider "dinamico" -----------------------------------------------------
-  "destinatari" e "messaggi" sono array veri: GetDynamicToolDefs +
-  InvokeDynamic, come TRitiroRichiamoToolProvider e TFilesToolsProvider.
-
-  L'invio vero e' in services/Service.EmailServer.pas (TEmailServer), la
-  configurazione nella sezione [SMTP] dell'ini (TConfig.SMTP).
-  ============================================================================ *)
+// Tool MCP per le email. Provider generico: non sa nulla di clienti o lotti, spedisce
+// indirizzi e contenuti decisi da altri.
+// invia_email (scrittura con conferma): email libera, oggetto e testo scritti dal modello,
+// un solo messaggio con tutti i destinatari in "A".
+// anteprima_email_da_modello (lettura): compone, senza inviare, una bozza per ogni elemento
+// di "messaggi" da un modello della tabella modelli_email.
+// invia_email_da_modello (scrittura con conferma): come l'anteprima, ma invia una email
+// separata per elemento.
+// Per le comunicazioni ufficiali (ritiro/richiamo) si usa il testo fisso: e'
+// deterministico, si modifica nel database senza ricompilare e il modello non scrive nulla,
+// decide solo quando chiamare i tool.
+// Ogni elemento di "messaggi" e' {"email","modello","variabili"}. Di norma li prepara un
+// tool di dominio e il piano li passa per riferimento ("messaggi": "$1.comunicazioni").
+// Le bozze in chat sono modificabili: le email corrette a mano non ripassano da qui
+// (verrebbero ricomposte dal modello perdendo le correzioni), ma dal pulsante "Invia", che
+// chiama POST /api/email/invio. Anteprima e invio passano da ComponiMessaggi, quindi danno
+// lo stesso testo.
+// I due tool di invio non scrivono nel database ma hanno un effetto irreversibile fuori
+// dall'azienda: nel contratto sono scritture con conferma.
+// Provider dinamico: "destinatari" e "messaggi" sono array veri (GetDynamicToolDefs +
+// InvokeDynamic). L'invio e' in TEmailServer, la configurazione nella sezione [SMTP]
+// dell'ini.
 
 interface
 
@@ -74,8 +40,8 @@ type
     function GetDynamicToolDefs: TArray<TMCPDynamicToolDef>; override;
     function InvokeDynamic(const AToolName: string;
       AArguments: TJDOJsonObject): TMCPToolResult; override;
-    // Contratti dei tool per il pianificatore (vedi agente_ai/tool/
-    // uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratti dei tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
@@ -86,13 +52,11 @@ const
   TOOL_ANTEPRIMA_DA_MODELLO = 'anteprima_email_da_modello';
   TOOL_INVIA_DA_MODELLO = 'invia_email_da_modello';
 
-  // Tetti prudenziali: una sola conferma non deve poter far partire
-  // centinaia di email.
+  // Tetti prudenziali: una conferma non deve far partire centinaia di email.
   MAX_DESTINATARI = 50;
   MAX_MESSAGGI = 100;
 
 type
-  // Un messaggio da modello gia' composto, pronto per anteprima o invio.
   TMessaggioComposto = record
     Email: string;
     Modello: string;
@@ -100,15 +64,10 @@ type
     Composta: TEmailComposta;
   end;
 
-{ Funzioni di supporto, private all'unit }
-
-// Legge "destinatari" (invia_email): array di indirizzi, almeno uno. Toglie
-// i doppioni (senza distinguere maiuscole/minuscole). Solleva un'eccezione
-// con un messaggio leggibile dal modello se qualcosa non va.
-//
-// Tolleranza: se arriva una STRINGA invece di un array (errore frequente
-// dei modelli piccoli con un solo destinatario) la si accetta, anche con piu'
-// indirizzi separati da virgola o punto e virgola.
+// Legge "destinatari": array di indirizzi, almeno uno, senza doppioni (maiuscole ignorate).
+// Errori con messaggio leggibile dal modello. Tolleranza: una stringa al posto dell'array
+// (errore frequente dei modelli piccoli) e' accettata, anche con indirizzi separati da
+// virgola o punto e virgola.
 function LeggiDestinatari(AArguments: TJDOJsonObject): TArray<string>;
 var
   LGrezzi, LPuliti: TArray<string>;
@@ -168,11 +127,9 @@ begin
   Result := LPuliti;
 end;
 
-// Legge "messaggi" e compone OGNI email dal suo modello. Regola "tutto o
-// niente": al primo messaggio che non si puo' comporre (indirizzo non
-// valido, modello inesistente, valore mancante) solleva un'eccezione, e il
-// chiamante non invia nulla. Meglio nessuna email che meta' dei clienti
-// avvisati e l'altra meta' no senza che l'utente lo abbia deciso.
+// Legge "messaggi" e compone ogni email dal suo modello. Tutto o niente: se un messaggio
+// non si compone (indirizzo non valido, modello inesistente, valore mancante) solleva
+// un'eccezione e non si invia nulla, meglio che avvisare meta' dei clienti.
 function ComponiMessaggi(AArguments: TJDOJsonObject): TArray<TMessaggioComposto>;
 var
   LArray: TJDOJsonArray;
@@ -226,8 +183,8 @@ begin
       Result[I].Modello := LModello.Codice;
       Result[I].Categoria := LModello.Categoria;
 
-      // "variabili": oggetto libero nome -> valore. I numeri diventano
-      // testo; i nomi si confrontano in minuscolo con i segnaposto.
+      // "variabili": oggetto libero nome -> valore; i numeri diventano testo, i nomi si
+      // confrontano in minuscolo coi segnaposto.
       LVariabili.Clear;
       if LElemento.Contains('variabili') and (LElemento.Types['variabili'] = jdtObject) then
       begin
@@ -247,15 +204,13 @@ begin
   end;
 end;
 
-// --- invia_email: email libera ---------------------------------------------
 function EseguiInviaEmail(AArguments: TJDOJsonObject): TMCPToolResult;
 var
   LDestinatari: TArray<string>;
   LOggetto, LCorpo, LErrore, LIndirizzo: string;
   LRoot: TJDOJsonObject;
 begin
-  // 1. Validazione degli argomenti: errori imputabili al modello, restituiti
-  //    come errore del tool (il modello li legge e puo' correggersi).
+  // Errori imputabili al modello: restituiti come errore del tool, cosi' puo' correggersi.
   try
     LDestinatari := LeggiDestinatari(AArguments);
   except
@@ -263,7 +218,7 @@ begin
       Exit(TMCPToolResult.Error(E.Message));
   end;
 
-  // L'oggetto e' un'intestazione del messaggio: deve stare su una riga sola.
+  // L'oggetto e' un'intestazione: una riga sola.
   LOggetto := AArguments.S['oggetto'];
   LOggetto := StringReplace(LOggetto, #13, ' ', [rfReplaceAll]);
   LOggetto := Trim(StringReplace(LOggetto, #10, ' ', [rfReplaceAll]));
@@ -274,21 +229,19 @@ begin
   if Trim(LCorpo) = '' then
     Exit(TMCPToolResult.Error('Parametro "corpo" mancante o vuoto: scrivi il testo dell''email.'));
 
-  // 2. Configurazione: controllata prima di tentare la connessione, cosi'
-  //    "manca la sezione [SMTP]" non si confonde con un errore di rete.
+  // Configurazione controllata prima della connessione, per non confondere "manca [SMTP]"
+  // con un errore di rete.
   if not TEmailServer.Configurato(LErrore) then
     Exit(TMCPToolResult.Error(LErrore));
 
-  // 3. Invio. Un solo messaggio: i destinatari vanno in un'unica
-  //    intestazione "A", separati da virgola. Default(TEmailAllegato) =
-  //    allegato vuoto, cioe' nessun allegato. Il testo semplice diventa HTML
-  //    (TEmailServer spedisce sempre HTML).
+  // Un solo messaggio, destinatari in un'unica intestazione "A". Il testo semplice diventa
+  // HTML (TEmailServer spedisce sempre HTML).
   if not TEmailServer.InviaConAllegato(string.Join(', ', LDestinatari), LOggetto,
     TServizioModelliEmail.TestoComeHtml(LCorpo), Default(TEmailAllegato), LErrore) then
     Exit(TMCPToolResult.Error('Invio dell''email non riuscito: ' + LErrore));
 
-  // 4. Esito: si ripete A CHI e con quale oggetto e' partita, cosi' la
-  //    risposta finale all'utente si basa su cio' che e' stato fatto davvero.
+  // Si ripete a chi e con quale oggetto e' partita, cosi' la risposta finale si basa su
+  // cio' che e' successo davvero.
   LRoot := TJDOJsonObject.Create;
   try
     LRoot.S['esito'] := 'ok';
@@ -301,7 +254,6 @@ begin
   end;
 end;
 
-// --- anteprima_email_da_modello: compone e mostra, non invia ----------------
 function EseguiAnteprimaDaModello(AArguments: TJDOJsonObject): TMCPToolResult;
 var
   LMessaggi: TArray<TMessaggioComposto>;
@@ -336,7 +288,6 @@ begin
   end;
 end;
 
-// --- invia_email_da_modello: compone e invia, una email per messaggio -------
 function EseguiInviaDaModello(AArguments: TJDOJsonObject): TMCPToolResult;
 var
   LMessaggi: TArray<TMessaggioComposto>;
@@ -347,8 +298,7 @@ var
   LInviate, LNonInviate: Integer;
   LInviata: Boolean;
 begin
-  // 1. Prima si compone TUTTO: se anche un solo messaggio non si puo'
-  //    comporre non parte nulla (vedi ComponiMessaggi).
+  // Prima si compone tutto: se un messaggio non si compone non parte nulla.
   try
     LMessaggi := ComponiMessaggi(AArguments);
   except
@@ -359,10 +309,8 @@ begin
   if not TEmailServer.Configurato(LErrore) then
     Exit(TMCPToolResult.Error(LErrore));
 
-  // 2. Invio, un messaggio alla volta. Da qui in poi un errore riguarda la
-  //    SINGOLA email (casella rifiutata, connessione caduta): le altre si
-  //    tentano comunque e l'esito riporta, riga per riga, che cosa e'
-  //    partito e che cosa no. E' l'utente a decidere se ritentare.
+  // Da qui un errore riguarda la singola email: le altre si tentano comunque e l'esito
+  // riporta riga per riga cosa e' partito. Ritentare e' una scelta dell'utente.
   LInviate := 0;
   LNonInviate := 0;
   LPrimoErrore := '';
@@ -394,7 +342,7 @@ begin
     LRoot.I['inviate'] := LInviate;
     LRoot.I['non_inviate'] := LNonInviate;
 
-    // Nessuna email partita: e' un fallimento del tool, non un esito "ok".
+    // Nessuna email partita: fallimento del tool, non esito "ok".
     if LInviate = 0 then
       Exit(TMCPToolResult.Error('Nessuna email inviata. Primo errore: ' + LPrimoErrore));
 
@@ -403,8 +351,6 @@ begin
     LRoot.Free;
   end;
 end;
-
-{ TEmailToolProvider }
 
 function TEmailToolProvider.GetDynamicToolDefs: TArray<TMCPDynamicToolDef>;
 const
@@ -455,9 +401,9 @@ begin
     'quando l''utente vuole vedere o controllare le comunicazioni (es. di ritiro/richiamo ai ' +
     'clienti) prima di inviarle. Il testo NON lo scrivi tu: viene dal modello salvato nel ' +
     'gestionale. ' +
-    // 04/10/2026 (run 4, caso S1-F): il modello pianificava la sola anteprima
-    // e cercava i messaggi in un passo del turno precedente. La dipendenza e'
-    // una proprieta' del tool, quindi sta qui e non in un esempio del prompt.
+    // 04/10/2026: il modello pianificava la sola anteprima e cercava i messaggi in un passo
+    // del turno precedente. La dipendenza e' una proprieta' del tool, quindi sta qui e non
+    // in un esempio del prompt.
     'Per le comunicazioni di ritiro/richiamo servono SEMPRE DUE passi nello stesso piano: ' +
     'passo 1 trova_ordini_spedizioni_lotto_prodotto_finito sui lotti di prodotto finito ' +
     'coinvolti, passo 2 questo tool con "messaggi" = "$1.comunicazioni". Vale anche se la ' +
@@ -484,7 +430,6 @@ begin
   if AArguments = nil then
     Exit(TMCPToolResult.Error('Argomenti mancanti per "' + AToolName + '".'));
 
-  // Un tool = una funzione qui sopra: InvokeDynamic smista soltanto.
   if SameText(AToolName, TOOL_INVIA_EMAIL) then
     Result := EseguiInviaEmail(AArguments)
   else if SameText(AToolName, TOOL_ANTEPRIMA_DA_MODELLO) then
@@ -496,18 +441,12 @@ begin
       '"%s" non e'' un tool gestito da questo provider.', [AToolName]));
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTI DEI TOOL (vedi agente_ai/tool/uContrattiTool.pas). Gli schemi di
-// output descrivono le risposte "ok" costruite qui sopra: se cambia una
-// risposta va cambiato anche il suo schema.
-//
-// I vincoli aggiungono cio' che lo schema del server (solo "array") non dice.
-// VINCOLO_MESSAGGI dichiara la forma degli elementi: e' cio' che permette al
-// validatore del piano di accettare "messaggi": "$1.comunicazioni" solo se
-// il tool sorgente produce davvero oggetti {"email","modello","variabili"}.
-// "variabili" resta un oggetto libero: i nomi dipendono dal modello scelto e
+// Contratti (vedi uContrattiTool.pas). Gli schemi di output descrivono le risposte
+// costruite sopra: se cambia una risposta, va cambiato anche lo schema. VINCOLO_MESSAGGI
+// dichiara la forma degli elementi: permette al validatore di accettare "messaggi":
+// "$1.comunicazioni" solo se il tool sorgente produce oggetti
+// {"email","modello","variabili"}. "variabili" resta libero: i nomi dipendono dal modello e
 // li controlla TServizioModelliEmail.Componi.
-// ---------------------------------------------------------------------------
 
 const
   SCHEMA_OUTPUT_INVIA_EMAIL =
@@ -543,7 +482,6 @@ const
 class function TEmailToolProvider.ContrattiTool: TArray<TContrattoTool>;
 begin
   Result := TArray<TContrattoTool>.Create(
-    // etScrittura + conferma: vedi "Scritture con conferma" in testa.
     ContrattoTool(TOOL_INVIA_EMAIL, etScrittura, True,
       SCHEMA_OUTPUT_INVIA_EMAIL,
       TArray<TVincoloParametro>.Create(

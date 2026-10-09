@@ -10,28 +10,16 @@ uses
   uServiziLotti;
 
 type
-  // Endpoint di sola lettura dei lotti di materia prima (tabella
-  // lotti_materie_prime), a supporto della vista Lotti del frontend web.
-  //
-  //   GET /api/lotti-materie-prime                     tutti i lotti (FEFO)
-  //   GET /api/lotti-materie-prime?materia_prima_id=7   solo quelli di una materia prima
-  //   GET /api/lotti-materie-prime/(id)                 un singolo lotto
-  //
-  // Nessun POST/PUT/DELETE: vedi il commento di classe in
-  // TServizioLotti (services/uServiziLotti.pas) sul perche' la
-  // scrittura di un lotto non passa da qui.
-  //
-  // Controller volutamente sottile (stesso principio di
-  // TControllerOrdiniVendita): legge/valida i parametri, delega tutta
-  // la query - JOIN sull'anagrafica materie prime compreso - a
-  // TServizioLotti, traduce l'esito in risposta HTTP.
+  // Lettura dei lotti di materia prima per la vista Lotti. GET /api/lotti-materie-prime
+  // (tutti, FEFO), ?materia_prima_id=7 (una materia prima), /(id) (un lotto). Niente
+  // POST/PUT/DELETE: vedi TServizioLotti sul perche' la scrittura di un lotto non passa da
+  // qui. Controller sottile: valida i parametri e delega la query (con la JOIN sulle
+  // materie prime) a TServizioLotti.
   [MVCPath('/api/lotti-materie-prime')]
   TControllerLottiMateriePrime = class(TMVCController)
   private
-    // Legge un intero dalla query string; 0 (= "filtro assente") se il
-    // parametro manca o non e' numerico. Stessa scelta e stesso motivo
-    // di TControllerOrdiniVendita.ParamIntero: un URL sporco non deve
-    // rompere la vista, deve solo comportarsi come "nessun filtro".
+    // Intero dalla query string; 0 ("filtro assente") se manca o non e' numerico: un URL
+    // sporco non deve rompere la vista (come TControllerOrdiniVendita.ParamIntero).
     function ParamIntero(ctx: TWebContext; const ANome: string): Integer;
   public
     [MVCPath('')]
@@ -44,8 +32,6 @@ type
   end;
 
 implementation
-
-{ TControllerLottiMateriePrime }
 
 function TControllerLottiMateriePrime.ParamIntero(ctx: TWebContext;
   const ANome: string): Integer;

@@ -10,19 +10,12 @@ uses
   DbU;
 
 type
-  // Rappresenta la testata di una versione di ricetta di un prodotto
-  // finito (tabella ricette_prodotti_finiti). Speculare a
-  // TRicettaSemilavorato — stesso meccanismo di versionamento
-  // (ValidaAl = NULL = versione corrente, indice unico parziale sul DB,
-  // sentinella 0 per NULL) — vedi i commenti su quella classe per il
-  // ragionamento completo.
-  //
-  // E' l'entita' centrale dello scenario 3 (adattamento ricette): il
-  // "Turno 1" recupera la ricetta corrente di un prodotto finito
-  // (GetCorrente) per proporre sostituti agli ingredienti che violano un
-  // vincolo dietetico; il "Turno 2" usa i prezzi e le dosi originali
-  // (tramite le righe, TRicettaProdottoFinitoRiga) per calcolare il
-  // delta di costo e il nuovo prezzo di vendita suggerito.
+  // Testata di una versione di ricetta di prodotto finito (ricette_prodotti_finiti). Stesso
+  // versionamento di TRicettaSemilavorato (ValidaAl = NULL = versione corrente, indice
+  // unico parziale, 0 = NULL): vedi li' il ragionamento completo.
+  // E' l'entita' centrale dello scenario 3: il turno 1 legge la ricetta corrente
+  // (GetCorrente) per proporre sostituti; il turno 2 usa prezzi e dosi originali
+  // (TRicettaProdottoFinitoRiga) per il delta di costo e il nuovo prezzo suggerito.
   TRicettaProdottoFinito = class
   private
     FID: Integer;
@@ -49,12 +42,9 @@ type
     property CreatoDa: string read FCreatoDa write FCreatoDa;
     property Note: string read FNote write FNote;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_ricette_prodotti_finiti_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TRicettaProdottoFinito;
     class function GetCorrente(AProdottoFinitoID: Integer): TRicettaProdottoFinito;
     class function GetByVersione(AProdottoFinitoID, AVersione: Integer): TRicettaProdottoFinito;
@@ -66,8 +56,8 @@ type
     function ToJSONObject: TJSONObject;
     procedure FromJSONObject(AJSON: TJSONObject);
 
-    // Vedi TRicettaSemilavorato.CreaNuovaVersione: stesso pattern,
-    // chiusura+apertura atomica via TDB.ExecuteQueriesInTransaction.
+    // Come TRicettaSemilavorato.CreaNuovaVersione: chiusura + apertura atomica con
+    // TDB.ExecuteQueriesInTransaction.
     class function CreaNuovaVersione(AProdottoFinitoID: Integer;
       const ACreatoDa, ANote: string): TRicettaProdottoFinito;
 
@@ -80,8 +70,6 @@ const
     'SELECT id, prodotto_finito_id, versione, valida_dal, valida_al, ' +
     'creato_da, note, creato_il, aggiornato_il ' +
     'FROM ricette_prodotti_finiti ';
-
-{ TRicettaProdottoFinito }
 
 constructor TRicettaProdottoFinito.Create;
 begin
@@ -202,11 +190,8 @@ end;
 
 class function TRicettaProdottoFinito.Delete(AID: Integer): Boolean;
 begin
-  // Una ricetta e' referenziata da ricette_prodotti_finiti_righe e da
-  // lotti_prodotti_finiti.ricetta_id: in assenza di ON DELETE CASCADE
-  // lato DB, la query fallisce se la ricetta ha righe o e' gia' stata
-  // usata per produrre un lotto. Comportamento voluto: per "ritirarla"
-  // dall'uso corrente si usa CreaNuovaVersione, non Delete.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ricette_prodotti_finiti WHERE id = :id', [AID]);
 end;
@@ -216,8 +201,7 @@ var
   LAutoQuery: TAutoQuery;
   LValidaAlParam: Variant;
 begin
-  // Da usare SOLO per la primissima versione di una ricetta. Per
-  // introdurre una modifica usare CreaNuovaVersione.
+  // Solo per la primissima versione. Per modificare usare CreaNuovaVersione.
   if FValidaAl = 0 then
     LValidaAlParam := Null
   else
@@ -245,10 +229,7 @@ var
   LAutoQuery: TAutoQuery;
   LValidaAlParam: Variant;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_ricette_prodotti_finiti_aggiornato_il lo valorizza
-  // automaticamente. Per il flusso normale di "nuova versione" si usa
-  // CreaNuovaVersione, non Update.
+  // aggiornato_il lo imposta il trigger.
   if FValidaAl = 0 then
     LValidaAlParam := Null
   else
@@ -293,8 +274,7 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // id, versione, valida_al, creato_il, aggiornato_il NON vengono letti
-  // dal payload in ingresso: il versionamento e' gestito da
+  // id, versione, valida_al e audit non si leggono dal payload: il versionamento e' di
   // CreaNuovaVersione.
   if AJSON.TryGetValue<Integer>('prodotto_finito_id', LValInt) then
     FProdottoFinitoID := LValInt;
@@ -338,8 +318,7 @@ begin
     end
     else
     begin
-      // Nessuna versione corrente da chiudere: primissima ricetta di
-      // questo prodotto finito, un semplice Insert basta.
+      // Nessuna versione corrente da chiudere: basta un Insert.
       Result := TRicettaProdottoFinito.Create;
       Result.ProdottoFinitoID := AProdottoFinitoID;
       Result.Versione := LNuovaVersione;

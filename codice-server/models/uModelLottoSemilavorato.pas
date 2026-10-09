@@ -10,25 +10,14 @@ uses
   DbU;
 
 type
-  // Rappresenta un lotto fisico di semilavorato prodotto internamente
-  // (tabella lotti_semilavorati). A differenza di TLottoMateriaPrima,
-  // qui UnitaMisura e' un campo proprio (il DDL non lo eredita da
-  // nessuna riga esterna), e non c'e' DataScadenza: il DDL non la
-  // prevede per i semilavorati, presumibilmente perche' sono prodotti
-  // intermedi con vita utile breve e non etichettati singolarmente per
-  // il consumatore finale (a differenza dei prodotti finiti, che invece
-  // hanno sia data_produzione sia data_scadenza).
-  //
-  // RicettaID punta alla versione di ricetta (ricette_semilavorati)
-  // effettivamente usata per produrre QUESTO lotto: e' un dato di
-  // tracciabilita' importante perche' le ricette sono versionate (vedi
-  // ricette_semilavorati.versione) — sapere quale versione e' stata
-  // usata e' essenziale per lo scenario di ritiro/richiamo, dove va
-  // ricostruita esattamente la composizione del lotto coinvolto.
-  //
-  // Quantita/QuantitaDisponibile usano Currency per lo stesso motivo di
-  // TLottoMateriaPrima: precisione esatta a 4 decimali, come le colonne
-  // NUMERIC(10,4) del DB.
+  // Lotto di semilavorato prodotto internamente (lotti_semilavorati). A differenza di
+  // TLottoMateriaPrima ha UnitaMisura propria e non ha DataScadenza (il DDL non la prevede
+  // per i semilavorati).
+  // RicettaID e' la versione di ricetta (ricette_semilavorati) usata per QUESTO lotto:
+  // essenziale per il richiamo, che deve ricostruirne la composizione esatta, perche' le
+  // ricette sono versionate.
+  // Quantita e QuantitaDisponibile sono Currency come in TLottoMateriaPrima
+  // (NUMERIC(10,4)).
   TLottoSemilavorato = class
   private
     FID: Integer;
@@ -57,12 +46,9 @@ type
     property RicettaID: Integer read FRicettaID write FRicettaID;
     property StabilimentoID: Integer read FStabilimentoID write FStabilimentoID;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_lotti_semilavorati_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TLottoSemilavorato;
     class function GetByCodiceLotto(ASemilavoratoID: Integer;
       const ACodiceLotto: string): TLottoSemilavorato;
@@ -70,11 +56,9 @@ type
     class function GetBySemilavorato(ASemilavoratoID: Integer): TObjectList<TLottoSemilavorato>;
     class function Delete(AID: Integer): Boolean;
 
-    // Decremento atomico e condizionato della giacenza disponibile.
-    // Stesso ruolo e stessa logica di TLottoMateriaPrima.DecrementaQuantitaDisponibile
-    // (vedi commento li'): usato da TServizioGiacenza quando un lotto di
-    // semilavorato e' il COMPONENTE consumato per produrre un altro
-    // lotto (di semilavorato "genitore" o di prodotto finito).
+    // Decremento atomico e condizionato della giacenza, come
+    // TLottoMateriaPrima.DecrementaQuantitaDisponibile. Usato da TServizioGiacenza quando
+    // un lotto di semilavorato e' il componente consumato per un altro lotto.
     class function DecrementaQuantitaDisponibile(AID: Integer; AQuantita: Currency;
       AConnection: TFDConnection): Boolean;
 
@@ -94,8 +78,6 @@ const
     'quantita_disponibile, unita_misura, ricetta_id, stabilimento_id, ' +
     'creato_il, aggiornato_il ' +
     'FROM lotti_semilavorati ';
-
-{ TLottoSemilavorato }
 
 constructor TLottoSemilavorato.Create;
 begin
@@ -142,8 +124,7 @@ class function TLottoSemilavorato.GetByCodiceLotto(ASemilavoratoID: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // Il codice lotto e' univoco solo all'interno dello stesso semilavorato
-  // (vincolo uq_lotto_semilavorato), non globalmente.
+  // Il codice lotto e' univoco solo per semilavorato (uq_lotto_semilavorato).
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -168,9 +149,7 @@ var
 begin
   Result := TObjectList<TLottoSemilavorato>.Create(True); // possiede gli oggetti
 
-  // Ordinamento per data_produzione: qui non c'e' data_scadenza su cui
-  // ordinare (assente nel DDL per i semilavorati), quindi si usa la data
-  // di produzione, piu' recente per ultima.
+  // Ordine per data_produzione: non c'e' data_scadenza.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'ORDER BY data_produzione');
   try
@@ -191,11 +170,8 @@ var
   LAutoQuery: TAutoQuery;
   LLotto: TLottoSemilavorato;
 begin
-  // Tutti i lotti di uno specifico semilavorato. Come per
-  // TLottoMateriaPrima.GetByMateriaPrima, e' il punto di partenza per
-  // risalire la catena di tracciabilita' nello scenario di
-  // ritiro/richiamo, quando il componente non conforme e' un
-  // semilavorato anziche' una materia prima.
+  // Lotti di un semilavorato: punto di partenza della risalita nel richiamo quando il
+  // componente non conforme e' un semilavorato.
   Result := TObjectList<TLottoSemilavorato>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -217,11 +193,8 @@ end;
 
 class function TLottoSemilavorato.Delete(AID: Integer): Boolean;
 begin
-  // Un lotto di semilavorato e' referenziato da
-  // consumi_produzione_semilavorati (sia come lotto prodotto sia come
-  // componente consumato di un altro lotto), consumi_produzione_prodotti_finiti
-  // e non_conformita: in assenza di ON DELETE CASCADE lato DB, la query
-  // fallisce se il lotto e' gia' stato usato. Comportamento voluto.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM lotti_semilavorati WHERE id = :id', [AID]);
 end;
@@ -231,10 +204,8 @@ class function TLottoSemilavorato.DecrementaQuantitaDisponibile(AID: Integer;
 var
   LQuery: TFDQuery;
 begin
-  // Vedi il commento gemello in TLottoMateriaPrima.DecrementaQuantitaDisponibile:
-  // stessa tecnica (UPDATE condizionata sulla connessione esterna
-  // ricevuta), stesso motivo (atomicita' con l'insert della riga di
-  // consumo nella stessa transazione).
+  // Come TLottoMateriaPrima.DecrementaQuantitaDisponibile: UPDATE condizionata sulla
+  // connessione ricevuta, per l'atomicita' con l'insert del consumo.
   LQuery := TFDQuery.Create(nil);
   try
     LQuery.Connection := AConnection;
@@ -256,13 +227,7 @@ function TLottoSemilavorato.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
-  // Come per TLottoMateriaPrima: il DB ha DEFAULT 0 su
-  // quantita_disponibile solo come garanzia di NOT NULL. Per un lotto
-  // appena prodotto la regola di business e' QuantitaDisponibile =
-  // Quantita: e' responsabilita' del chiamante impostarla prima di
-  // chiamare Insert.
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO lotti_semilavorati ' +
     '(semilavorato_id, codice_lotto, data_produzione, quantita, ' +
@@ -286,8 +251,7 @@ function TLottoSemilavorato.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_lotti_semilavorati_aggiornato_il lo valorizza automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE lotti_semilavorati SET semilavorato_id = :semilavorato_id, ' +
     'codice_lotto = :codice_lotto, data_produzione = :data_produzione, ' +
@@ -340,8 +304,7 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('semilavorato_id', LValInt) then
     FSemilavoratoID := LValInt;
   if AJSON.TryGetValue<string>('codice_lotto', LValStr) then
@@ -355,8 +318,7 @@ begin
   if AJSON.TryGetValue<Integer>('stabilimento_id', LValInt) then
     FStabilimentoID := LValInt;
 
-  // Campi numerici decimali: letti come TJSONNumber per preservarne la
-  // precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita', LValNum) and (LValNum is TJSONNumber) then
     FQuantita := TJSONNumber(LValNum).AsDouble;
   if AJSON.TryGetValue<TJSONValue>('quantita_disponibile', LValNum) and (LValNum is TJSONNumber) then

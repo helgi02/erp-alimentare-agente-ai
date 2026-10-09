@@ -8,31 +8,16 @@ uses
   DbU;
 
 type
-  // Servizio di sola lettura che produce il riepilogo mostrato nella
-  // home del frontend web.
-  //
-  // PERCHE' UN UNICO ENDPOINT AGGREGATO E NON CINQUE CHIAMATE
-  // La dashboard e' la prima schermata che si apre: farle fare cinque
-  // richieste HTTP separate significherebbe cinque round trip di rete e
-  // cinque prelievi dal pool di connessioni per disegnare una sola
-  // pagina. Le singole risorse restano comunque interrogabili dai
-  // rispettivi controller CRUD per le altre viste: qui si aggrega solo
-  // cio' che serve alla home.
-  //
-  // PERCHE' JSON COSTRUITO A MANO E NON I MODEL
-  // I dati della dashboard sono aggregazioni (COUNT, SUM, GROUP BY) e
-  // proiezioni con JOIN, non entita' del dominio: non esiste un
-  // "TDashboard" da mappare, e passare per i model significherebbe
-  // caricare in memoria oggetti interi per poi contarli in Delphi
-  // invece che nel database. Le query restituiscono gia' la forma
-  // finale, il servizio si limita a tradurla in JSON.
-  //
-  // NOTA SUI TOTALI DEGLI ORDINI
-  // Il totale di un ordine non e' una colonna di ordini_vendita: si
-  // calcola come SUM(quantita * prezzo_unitario) sulle righe. E' una
-  // scelta del DDL (nessun dato derivato memorizzato, quindi nessun
-  // rischio di disallineamento fra testata e righe), e si riflette qui
-  // in una subquery invece che in una lettura diretta.
+  // Riepilogo di sola lettura per la home del frontend.
+  // Un unico endpoint aggregato e non cinque chiamate: la home e' la prima schermata, e
+  // cinque richieste sarebbero cinque round trip e cinque connessioni dal pool. Le singole
+  // risorse restano nei rispettivi controller.
+  // JSON costruito a mano e non dai model: sono aggregazioni (COUNT, SUM, GROUP BY) e JOIN,
+  // non entita'; passare dai model vorrebbe dire caricare oggetti interi per contarli in
+  // Delphi invece che nel database.
+  // Il totale di un ordine non e' una colonna di ordini_vendita: e' SUM(quantita *
+  // prezzo_unitario) sulle righe (scelta del DDL: nessun dato derivato, nessun
+  // disallineamento testata-righe), quindi qui e' una subquery.
   TServizioDashboard = class
   private
     class function LeggiKPI: TJSONObject;
@@ -41,22 +26,19 @@ type
     class function LeggiLottiInScadenza: TJSONArray;
     class function LeggiOrdiniRecenti: TJSONArray;
   public
-    // Chiamante responsabile della Free dell'oggetto restituito.
+    // Il chiamante libera l'oggetto restituito.
     class function Riepilogo: TJSONObject;
   end;
 
 implementation
 
 const
-  // Finestre temporali e limiti di riga, raccolti qui invece che
-  // sparsi nelle query: sono i parametri che con ogni probabilita'
-  // verranno ritoccati dopo le prime prove con dati reali.
+  // Finestre temporali e limiti di riga, raccolti qui perche' verranno ritoccati dopo le
+  // prove con dati reali.
   GIORNI_SCADENZA_IMMINENTE = 30;   // soglia "lotto in scadenza"
   GIORNI_FATTURATO          = 30;   // finestra del KPI fatturato
   MESI_STORICO_VENDITE      = 11;   // 11 mesi indietro + corrente = 12
   MAX_RIGHE_ELENCO          = 5;    // righe per ciascuna tabella della home
-
-{ TServizioDashboard }
 
 class function TServizioDashboard.Riepilogo: TJSONObject;
 begin
@@ -68,21 +50,17 @@ begin
     Result.AddPair('lottiInScadenza', LeggiLottiInScadenza);
     Result.AddPair('ordiniRecenti',   LeggiOrdiniRecenti);
   except
-    // Se una delle letture fallisce l'oggetto parziale non deve
-    // restare orfano: si libera qui e l'eccezione risale al controller,
-    // che la trasformera' in una risposta HTTP 500.
+    // Se una lettura fallisce l'oggetto parziale non resta orfano: si libera qui e
+    // l'eccezione arriva al controller (HTTP 500).
     Result.Free;
     raise;
   end;
 end;
 
-// I quattro indicatori in testa alla pagina, in UNA sola query: sono
-// quattro scalari indipendenti, e calcolarli come subquery della stessa
-// SELECT evita quattro giri separati verso PostgreSQL.
-//
-// Le soglie temporali sono interpolate nel testo SQL invece che passate
-// come parametri perche' sono costanti di compilazione (Integer), non
-// input esterni: nessuna superficie di SQL injection.
+// I quattro indicatori in una sola query (subquery scalari nella stessa SELECT), per
+// evitare quattro giri verso PostgreSQL. Le soglie sono interpolate nel testo SQL perche'
+// sono costanti di compilazione (Integer), non input esterno: nessun rischio di SQL
+// injection.
 class function TServizioDashboard.LeggiKPI: TJSONObject;
 var
   LAutoQuery: TAutoQuery;
@@ -90,20 +68,17 @@ var
 begin
   LSQL :=
     'SELECT ' +
-    // Non conformita' ancora da chiudere: 'aperta' e 'in_gestione'
-    // valgono entrambe come "aperte" per chi guarda la home.
+    // 'aperta' e 'in_gestione' valgono entrambe come aperte.
     '  (SELECT COUNT(*) FROM non_conformita ' +
     '     WHERE stato_nc <> ''chiusa'') AS nc_aperte, ' +
-    // Lotti prossimi alla scadenza: contano solo quelli con giacenza
-    // residua, un lotto gia' consumato non e' un problema.
+    // Solo lotti con giacenza residua: uno consumato non e' un problema.
     '  (SELECT COUNT(*) FROM lotti_materie_prime ' +
     '     WHERE quantita_disponibile > 0 ' +
     '       AND data_scadenza BETWEEN CURRENT_DATE ' +
     '           AND CURRENT_DATE + ' + GIORNI_SCADENZA_IMMINENTE.ToString + ') AS lotti_in_scadenza, ' +
-    // Ordini confermati ma non ancora spediti
     '  (SELECT COUNT(*) FROM ordini_vendita ' +
     '     WHERE stato = ''confermato'') AS ordini_da_spedire, ' +
-    // Fatturato dell'ultimo periodo, esclusi gli ordini annullati
+    // Fatturato dell'ultimo periodo, esclusi gli annullati.
     '  (SELECT COALESCE(SUM(ovr.quantita * ovr.prezzo_unitario), 0) ' +
     '     FROM ordini_vendita ov ' +
     '     JOIN ordini_vendita_righe ovr ON ovr.ordine_vendita_id = ov.id ' +
@@ -122,9 +97,8 @@ begin
     Result.AddPair('fatturatoPeriodo',
       TJSONNumber.Create(LAutoQuery.Query.FieldByName('fatturato_periodo').AsCurrency));
 
-    // Le finestre temporali viaggiano insieme ai numeri: e' il frontend
-    // a scrivere l'etichetta ("entro 30 giorni", "ultimi 30 giorni"), e
-    // deve poterlo fare senza avere le soglie cablate anche lui.
+    // Le finestre viaggiano coi numeri: l'etichetta ("entro 30 giorni") la scrive il
+    // frontend senza soglie cablate.
     Result.AddPair('giorniScadenza', TJSONNumber.Create(GIORNI_SCADENZA_IMMINENTE));
     Result.AddPair('giorniFatturato', TJSONNumber.Create(GIORNI_FATTURATO));
   finally
@@ -132,10 +106,8 @@ begin
   end;
 end;
 
-// Serie del fatturato per mese, ultimi 12 mesi.
-// Il mese viaggia in formato 'YYYY-MM': e' ordinabile, non ambiguo e
-// indipendente dal locale del server. L'etichetta leggibile ("ago 26")
-// la compone il frontend, che conosce la lingua dell'utente.
+// Fatturato per mese, ultimi 12. Il mese e' 'YYYY-MM' (ordinabile, non ambiguo,
+// indipendente dal locale); l'etichetta ("ago 26") la compone il frontend.
 class function TServizioDashboard.LeggiVenditeMensili: TJSONArray;
 var
   LAutoQuery: TAutoQuery;
@@ -170,14 +142,9 @@ begin
   end;
 end;
 
-// Ultime non conformita' aperte.
-//
-// I tre LEFT JOIN riflettono il vincolo chk_lotto_non_conformita del
-// DDL: una NC punta ad almeno uno fra lotto materia prima, semilavorato
-// e prodotto finito (e' un OR, non uno XOR - vedi commento in
-// uModelNonConformita). Il COALESCE prende il primo lotto valorizzato,
-// che per la home basta: il dettaglio completo, con eventuali lotti
-// multipli, appartiene alla vista della singola NC.
+// Ultime non conformita' aperte. I tre LEFT JOIN riflettono chk_lotto_non_conformita (OR,
+// non XOR, vedi uModelNonConformita); COALESCE prende il primo lotto valorizzato, basta per
+// la home: il dettaglio spetta alla vista della singola NC.
 class function TServizioDashboard.LeggiNonConformitaRecenti: TJSONArray;
 var
   LAutoQuery: TAutoQuery;
@@ -221,14 +188,9 @@ begin
   end;
 end;
 
-// Lotti di materia prima prossimi alla scadenza con giacenza residua.
-//
-// L'unita' di misura si prende dalla riga DDT di origine e non dal
-// lotto: LOTTI_MATERIE_PRIME non ha una colonna propria, la eredita da
-// ddt_entrata_righe.unita_misura (scelta del DDL per non duplicare - e
-// quindi non disallineare - lo stesso dato in due tabelle). Il JOIN e'
-// LEFT perche' la UM non deve poter far sparire una riga dall'elenco:
-// meglio un lotto senza unita' che un lotto in scadenza non mostrato.
+// Lotti di materia prima in scadenza con giacenza. L'unita' di misura viene dalla riga DDT
+// di origine (ddt_entrata_righe.unita_misura), perche' il lotto non ha una colonna propria.
+// LEFT JOIN: meglio un lotto senza unita' che uno in scadenza non mostrato.
 class function TServizioDashboard.LeggiLottiInScadenza: TJSONArray;
 var
   LAutoQuery: TAutoQuery;
@@ -272,9 +234,8 @@ begin
   end;
 end;
 
-// Ultimi ordini di vendita registrati.
-// Il totale e' una subquery correlata sulle righe: vedi la nota in
-// testa alla unit sul perche' non e' una colonna di ordini_vendita.
+// Ultimi ordini di vendita. Il totale e' una subquery correlata sulle righe (vedi nota in
+// testa).
 class function TServizioDashboard.LeggiOrdiniRecenti: TJSONArray;
 var
   LAutoQuery: TAutoQuery;

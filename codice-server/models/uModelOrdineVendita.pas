@@ -9,13 +9,9 @@ uses
   DbU;
 
 type
-  // Rappresenta la testata di un ordine di vendita verso un cliente
-  // (tabella ordini_vendita). Speculare a TOrdineFornitore, con stati
-  // diversi: 'confermato' -> 'spedito' -> 'consegnato', oppure
-  // 'annullato'. E' l'entita' centrale dello scenario di interrogazione
-  // vendite (2.2): report ad hoc per cliente, prodotto/categoria,
-  // periodo o area geografica partono tutti da qui e dalle sue righe
-  // (ordini_vendita_righe, vedi TOrdineVenditaRiga).
+  // Testata di un ordine di vendita (ordini_vendita). Stati: 'confermato' -> 'spedito' ->
+  // 'consegnato', oppure 'annullato'. E' l'entita' centrale delle interrogazioni vendite
+  // (2.2): i report per cliente, prodotto, periodo o area partono da qui e dalle righe.
   TOrdineVendita = class
   private
     FID: Integer;
@@ -39,12 +35,9 @@ type
     property Stato: string read FStato write FStato;
     property Note: string read FNote write FNote;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_ordini_vendita_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TOrdineVendita;
     class function GetByNumero(const ANumeroOrdine: string): TOrdineVendita;
     class function GetAll: TObjectList<TOrdineVendita>;
@@ -69,11 +62,8 @@ const
     'creato_il, aggiornato_il ' +
     'FROM ordini_vendita ';
 
-  // Valori ammessi da chk_stato_ordine_vendita: replicati qui per
-  // validare lato Delphi prima di arrivare al DB.
+  // Valori di chk_stato_ordine_vendita, validati qui prima del DB.
   STATI_VALIDI: array[0..3] of string = ('confermato', 'spedito', 'consegnato', 'annullato');
-
-{ TOrdineVendita }
 
 constructor TOrdineVendita.Create;
 begin
@@ -136,7 +126,7 @@ class function TOrdineVendita.GetByNumero(const ANumeroOrdine: string): TOrdineV
 var
   LAutoQuery: TAutoQuery;
 begin
-  // numero_ordine ha un vincolo UNIQUE globale.
+  // numero_ordine e' UNIQUE globale.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -179,9 +169,7 @@ var
   LAutoQuery: TAutoQuery;
   LOrdine: TOrdineVendita;
 begin
-  // Storico ordini di un cliente, dal piu' recente: e' esattamente il
-  // caso d'uso base dello scenario 2.2 ("un agente commerciale in
-  // trattativa vuole lo storico ordini di un cliente").
+  // Storico ordini di un cliente, dal piu' recente (caso base dello scenario 2.2).
   Result := TObjectList<TOrdineVendita>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -229,9 +217,8 @@ var
   LAutoQuery: TAutoQuery;
   LOrdine: TOrdineVendita;
 begin
-  // Filtro per intervallo di date: un altro dei parametri "ad hoc"
-  // menzionati nello scenario 2.2 ("le vendite di una categoria prodotto
-  // nell'ultimo trimestre", "confronto tra due periodi").
+  // Filtro per intervallo di date, per i parametri "ad hoc" dello scenario 2.2 (es. ultimo
+  // trimestre, confronto fra periodi).
   Result := TObjectList<TOrdineVendita>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -253,10 +240,8 @@ end;
 
 class function TOrdineVendita.Delete(AID: Integer): Boolean;
 begin
-  // Un ordine vendita e' referenziato da ordini_vendita_righe e
-  // ddt_uscita (ordine_vendita_id): in assenza di ON DELETE CASCADE lato
-  // DB, la query fallisce se l'ordine ha righe o e' gia' stato evaso.
-  // Comportamento voluto: usare stato = 'annullato' invece di cancellare.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ordini_vendita WHERE id = :id', [AID]);
 end;
@@ -267,10 +252,8 @@ var
 begin
   EnsureStatoValido;
 
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()). numero_ordine ha un
-  // vincolo UNIQUE: un duplicato solleva un'eccezione da gestire a
-  // livello di controller.
+  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
+  // un'eccezione da gestire nel controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ordini_vendita (numero_ordine, data_ordine, cliente_id, stato, note) ' +
     'VALUES (:numero_ordine, :data_ordine, :cliente_id, :stato, :note) ' +
@@ -292,8 +275,7 @@ var
 begin
   EnsureStatoValido;
 
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_ordini_vendita_aggiornato_il lo valorizza automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ordini_vendita SET numero_ordine = :numero_ordine, ' +
     'data_ordine = :data_ordine, cliente_id = :cliente_id, ' +
@@ -339,8 +321,7 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<string>('numero_ordine', LValStr) then
     FNumeroOrdine := LValStr;
   if AJSON.TryGetValue<string>('data_ordine', LValStr) then

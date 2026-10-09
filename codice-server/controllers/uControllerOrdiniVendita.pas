@@ -10,48 +10,24 @@ uses
   uServiziOrdiniVendita;
 
 type
-  // Endpoint di sola lettura degli ordini di vendita, a supporto della
-  // schermata Vendite del frontend web.
-  //
-  //   GET /api/ordini-vendita
-  //       ?cliente_id=  &prodotto_id=
-  //       &data_inizio= &data_fine=     (YYYY-MM-DD)
-  //       &stato=       &pagina=  &per_pagina=
-  //   GET /api/ordini-vendita/(id)
-  //
-  // DUE DIFFERENZE RISPETTO AI CONTROLLER DELLE ANAGRAFICHE
-  //
-  // 1) L'elenco non e' un GetAll. TCliente.GetAll restituisce l'intera
-  //    tabella e va bene: i clienti sono qualche centinaio. Gli ordini
-  //    di vendita crescono senza limite, quindi filtro e paginazione
-  //    devono stare nell'endpoint, non nel browser.
-  //
-  // 2) Non ci sono POST/PUT/DELETE. Nessuno dei tre scenari del
-  //    tirocinio crea o modifica ordini di vendita: esporre verbi di
-  //    scrittura che nessuno usa significherebbe scrivere e mantenere
-  //    codice non esercitato, cioe' codice di cui non si sa se funziona.
-  //
-  // Il controller resta sottile come gli altri: legge e valida i
-  // parametri, delega a TServizioOrdiniVendita, traduce l'esito in
-  // risposta HTTP.
+  // Lettura degli ordini di vendita per la schermata Vendite. GET /api/ordini-vendita con
+  // filtri cliente_id, prodotto_id, data_inizio, data_fine (YYYY-MM-DD), stato, pagina,
+  // per_pagina; GET /api/ordini-vendita/(id).
+  // Differenze dai controller delle anagrafiche: l'elenco non e' un GetAll (gli ordini
+  // crescono senza limite, quindi filtro e paginazione stanno nell'endpoint); niente
+  // POST/PUT/DELETE, perche' nessuno scenario modifica ordini e sarebbe codice mai
+  // esercitato.
+  // Controller sottile: valida i parametri e delega a TServizioOrdiniVendita.
   [MVCPath('/api/ordini-vendita')]
   TControllerOrdiniVendita = class(TMVCController)
   private
-    // Legge un parametro intero dalla query string. Restituisce 0 se
-    // assente o non numerico: 0 e' la sentinella di "filtro non
-    // applicato" usata da TFiltriOrdiniVendita, quindi un valore
-    // spazzatura si comporta come un filtro assente invece di far
-    // fallire la richiesta. Su una query string di una schermata e' la
-    // scelta giusta: la vista non deve rompersi per un URL sporco.
+    // Intero dalla query string; 0 se assente o non numerico, la sentinella di "filtro non
+    // applicato" di TFiltriOrdiniVendita: un URL sporco non deve rompere la vista.
     function ParamIntero(ctx: TWebContext; const ANome: string): Integer;
 
-    // Legge una data in formato ISO YYYY-MM-DD. Parsing manuale e non
-    // StrToDate per non dipendere dai FormatSettings del server, che
-    // potrebbero attendersi un ordine o un separatore diversi.
-    // Solleva un'eccezione se la stringa c'e' ma non e' valida: qui, a
-    // differenza degli interi, ignorare in silenzio sarebbe pericoloso
-    // (un periodo interpretato male produce numeri plausibili e
-    // sbagliati).
+    // Data ISO YYYY-MM-DD, con parsing manuale per non dipendere dai FormatSettings.
+    // Solleva un'eccezione se presente ma non valida: ignorarla in silenzio darebbe numeri
+    // plausibili e sbagliati.
     function ParamData(ctx: TWebContext; const ANome: string): TDateTime;
   public
     [MVCPath('')]
@@ -64,8 +40,6 @@ type
   end;
 
 implementation
-
-{ TControllerOrdiniVendita }
 
 function TControllerOrdiniVendita.ParamIntero(ctx: TWebContext;
   const ANome: string): Integer;
@@ -111,9 +85,8 @@ begin
     LFiltri.Pagina     := ParamIntero(ctx, 'pagina');
     LFiltri.PerPagina  := ParamIntero(ctx, 'per_pagina');
 
-    // Uno stato inesistente non e' un filtro sbagliato ma una richiesta
-    // priva di senso: meglio dirlo, altrimenti si otterrebbe un elenco
-    // vuoto e si penserebbe che non ci sono ordini.
+    // Uno stato inesistente e' una richiesta priva di senso: meglio dirlo che mostrare un
+    // elenco vuoto.
     if (LFiltri.Stato <> '') and
        not TServizioOrdiniVendita.StatoValido(LFiltri.Stato) then
     begin
@@ -123,8 +96,7 @@ begin
       Exit;
     end;
 
-    // Periodo rovesciato: non produce risultati e quasi sempre e' un
-    // errore di compilazione dei campi, non una richiesta voluta.
+    // Periodo rovesciato: quasi sempre un errore di compilazione dei campi.
     if (LFiltri.DataInizio > 0) and (LFiltri.DataFine > 0) and
        (LFiltri.DataInizio > LFiltri.DataFine) then
     begin
@@ -133,8 +105,7 @@ begin
       Exit;
     end;
 
-    // Render assume la proprieta' dell'oggetto e lo libera dopo la
-    // serializzazione: nessuna Free esplicita qui.
+    // Render libera l'oggetto: niente Free.
     Render(TServizioOrdiniVendita.Elenco(LFiltri));
   except
     on E: Exception do

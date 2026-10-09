@@ -1,34 +1,17 @@
 unit uRetrieverPiano;
 
-(* ============================================================================
-  RETRIEVAL PER AZIONE - tappa 5 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/retriever.py
-  (specifica: CONTRATTI.md, paragrafo 6).
-
-  -- Differenza rispetto all'orchestratore attuale -----------------------------
-  TServizioAgente.SelezionaToolPerDomanda cerca i tool sulla DOMANDA intera
-  dell'utente e seleziona per provider. Qui la ricerca si fa su ogni AZIONE
-  del piano ("trova le spedizioni ai clienti dei lotti del passo 1"): un
-  testo breve che descrive una sola operazione si avvicina a un solo tool
-  molto piu' di una domanda che ne contiene due.
-
-  -- Cosa fa -------------------------------------------------------------------
-  Per ogni passo del piano:
-    1. calcola i punteggi di tutti i tool rispetto all'azione (una sola
-       richiesta di embedding per tutte le azioni del piano);
-    2. sceglie i CANDIDATI: i primi K per punteggio, piu' quelli entro un
-       MARGINE dal migliore, al massimo KMax;
-    3. se il passo e' concreto (il Planner ha gia' scritto un tool noto),
-       controlla la scelta: il tool si tiene solo se e' il PRIMO per punteggio
-       su quell'azione. Altrimenti il passo viene DECLASSATO: perde tool e
-       argomenti e torna astratto, sara' il Completer a scegliere fra i
-       candidati. (Regola del 01/10: il Planner tendeva a riusare un tool
-       noto anche per un'azione diversa.)
-    4. se il passo e' astratto e non ha candidati, e' NON COPERTO: il
-       gestionale non ha un tool per quell'azione e il turno si ferma.
-
-  Deterministico: nessuna chiamata al modello di chat.
-  ============================================================================ *)
+// Retrieval per azione. A differenza di TServizioAgente.SelezionaToolPerDomanda (cerca
+// sulla domanda intera, per provider), qui si cerca su ogni AZIONE del piano: un testo
+// breve con una sola operazione si avvicina a un solo tool molto piu' di una domanda che ne
+// contiene due.
+// Per ogni passo: (1) punteggi di tutti i tool rispetto all'azione (una sola richiesta di
+// embedding per tutte le azioni); (2) CANDIDATI: i primi K, piu' quelli entro un MARGINE
+// dal migliore, al massimo KMax; (3) se il passo e' concreto (tool noto scritto dal
+// Planner), il tool si tiene solo se e' il PRIMO per punteggio, altrimenti il passo e'
+// DECLASSATO ad astratto e sceglie il Completer fra i candidati (il Planner tendeva a
+// riusare un tool noto per un'azione diversa); (4) se un passo astratto non ha candidati e'
+// NON COPERTO: il gestionale non ha un tool per quell'azione e il turno si ferma.
+// Deterministico: nessuna chiamata al modello di chat.
 
 interface
 
@@ -44,7 +27,7 @@ type
     Margine: Double;     // ammessi anche quelli entro Margine dal migliore
     KMax: Integer;       // tetto ai candidati di un passo
     SMin: Double;        // punteggio minimo (0 = nessun minimo)
-    // Valori del run conv_20261001_235839: K=2, Margine=0.03, KMax=6, SMin=0.
+    // Valori di riferimento: K=2, Margine=0.03, KMax=6, SMin=0.
     class function Predefinita: TConfigRetrieval; static;
   end;
 
@@ -92,8 +75,6 @@ type
 
 implementation
 
-{ TConfigRetrieval }
-
 class function TConfigRetrieval.Predefinita: TConfigRetrieval;
 begin
   Result.K := 2;
@@ -101,8 +82,6 @@ begin
   Result.KMax := 6;
   Result.SMin := 0.0;
 end;
-
-{ TRisultatoRetrieval }
 
 constructor TRisultatoRetrieval.Create;
 begin
@@ -161,8 +140,6 @@ begin
       Result := Result + [LVoce];
     end;
 end;
-
-{ TRetrieverPiano }
 
 class function TRetrieverPiano.Candidati(const APunteggi: TArray<TToolPertinente>;
   const AConfig: TConfigRetrieval): TArray<string>;

@@ -1,68 +1,28 @@
 unit uTurnoPianificato;
 
-(* ============================================================================
-  IL TURNO CON IL PIANIFICATORE - tappe 9 e 11 del porting.
-  Porting di scripts/prototipo_pianificatore/pianificatore/orchestratore.py,
-  adattato al protocollo a passi del server, piu' la conferma delle scritture
-  gestita dal codice (tappa 9).
-
-  -- Come entra nel server -----------------------------------------------------
-  Il turno resta quello di TServizioAgente (uServiziAgente.pas): stesso
-  TStatoTurno, stesso protocollo con il client (POST /api/ai/turni, poi un
-  POST /api/ai/turni/passo per volta), stessa diagnostica. Cambia CHI decide
-  cosa fare a ogni passo: quando il motore scelto e' "pianificatore"
-  ([Orchestratore] Motore nell'ini), TServizioAgente passa la mano a questa
-  unit; con "ciclo" tutto resta com'era. I due motori convivono per poterli
-  confrontare sulle stesse conversazioni.
-
-  -- Le fasi (un passo del protocollo = al massimo una chiamata al modello o
-     un tool) ---------------------------------------------------------------------
-    CONFERMA       solo se il turno precedente aspetta la conferma di una
-                   scrittura: una chiamata a risposta chiusa (conferma /
-                   annulla / altro) legge la risposta dell'utente. Il Planner
-                   NON viene chiamato.
-                     conferma -> si riprende il piano salvato dal passo che
-                                 era fermo, con gli stessi argomenti;
-                     annulla  -> testo fisso, niente viene modificato;
-                     altro    -> il turno prosegue come un turno normale.
-    PIANO          il Planner scrive il piano; subito dopo, senza modello, il
-                   retrieval trova i tool candidati per ogni azione.
-    COMPLETAMENTO  solo se restano passi astratti: il Completer sceglie tool
-                   e argomenti. Poi, senza modello: normalizzazione, deduplica
-                   e validazione del piano intero.
-    ESECUZIONE     un tool per passo, con i riferimenti risolti dal codice.
-    SINTESI        il modello racconta i dati letti (o spiega un arresto).
-
-  -- Come puo' finire un turno ------------------------------------------------------
-    piano non operativo      risposta del Planner
-    piano non valido         testo fisso, niente eseguito
-    scrittura da confermare  testo fisso, stato in_attesa_conferma
-    disambiguazione          testo fisso, stato in_attesa_scelta
-    tutto il resto           sintesi del modello (anche per errore di un
-                             tool, nessun elemento trovato, passo non coperto)
-
-  -- Il registro (tappa 12: diagnostica) ---------------------------------------------
-  Tutto cio' che succede in un turno viene annotato come una sequenza di
-  EVENTI, nell'ordine in cui avvengono: ogni chiamata al modello (fase,
-  token, durata, messaggi inviati, testo ricevuto), il piano, il retrieval
-  (candidati e punteggi di ogni passo), i controlli (normalizzazioni ed
-  errori di validazione), ogni tool eseguito (argomenti risolti, esito,
-  durata, risultato), la risposta. A fine turno il registro finisce in tre
-  file nella cartella logs accanto all'eseguibile:
-    pianificatore.log              leggibile, per seguire un turno a occhio
-    pianificatore_turni.csv        una riga per turno, con le metriche
-    pianificatore_dettaglio.jsonl  un oggetto JSON per turno, con tutto
-                                   (compresi i prompt): per ricostruire a
-                                   posteriori perche' un turno e' andato cosi'
-  Un riassunto degli eventi (senza i prompt) va anche nella risposta al
-  client, nel campo "pianificatore".
-
-  -- Lo storico ----------------------------------------------------------------------
-  TArchivioStorici tiene, per conversazione, lo storico dei turni
-  (uStoricoTurni.pas) e l'eventuale scrittura in sospeso. All'inizio del
-  turno se ne prende una COPIA (testo per il Planner, tool noti, sospeso);
-  alla fine si aggiunge il turno. Nessun oggetto dell'archivio esce dal lock.
-  ============================================================================ *)
+// Turno con il pianificatore. Il turno resta quello di TServizioAgente (stesso stato,
+// protocollo a passi e diagnostica); con [Orchestratore] Motore = 'pianificatore' le
+// decisioni di ogni passo le prende questa unit.
+// Fasi (ogni passo del protocollo = al massimo una chiamata al modello o un tool):
+// CONFERMA: solo se il turno precedente aspetta la conferma di una scrittura. Una chiamata
+// a risposta chiusa (conferma/annulla/altro) legge la risposta; il Planner non viene
+// chiamato.
+// PIANO: il Planner scrive il piano; poi, senza modello, il retrieval trova i tool
+// candidati per ogni azione.
+// COMPLETAMENTO: solo se restano passi astratti; il Completer sceglie tool e argomenti, poi
+// il codice normalizza, deduplica e valida il piano.
+// ESECUZIONE: un tool per passo, con i riferimenti risolti dal codice.
+// SINTESI: il modello racconta i dati letti o spiega un arresto.
+// Fine turno: piano non operativo (risposta del Planner), piano non valido (testo fisso),
+// scrittura da confermare (in_attesa_conferma), disambiguazione (in_attesa_scelta),
+// altrimenti sintesi del modello.
+// Registro: gli eventi del turno (chiamate al modello, piano, retrieval, controlli, tool,
+// risposta) vanno in logs/: pianificatore.log (leggibile), pianificatore_turni.csv
+// (metriche) e pianificatore_dettaglio.jsonl (tutto, prompt compresi). Un riassunto senza
+// prompt torna al client nel campo 'pianificatore'.
+// Storico: TArchivioStorici tiene per conversazione lo storico dei turni
+// (uStoricoTurni.pas) e l'eventuale scrittura in sospeso; a inizio turno se ne prende una
+// copia, a fine turno si aggiunge il turno.
 
 interface
 
@@ -95,8 +55,8 @@ type
   public
     class constructor Create;
     class destructor Destroy;
-    // Copia di cio' che serve a un turno. ASospeso e' del chiamante (nil se
-    // non c'e' una scrittura in attesa). Restituisce quanti turni ci sono.
+    // Copia di cio' che serve a un turno. ASospeso e' del chiamante (nil = nessuna
+    // scrittura in attesa). Restituisce il numero di turni.
     class function Istantanea(const AID: string; out AStoricoTesto: string;
       out AToolNoti: TArray<string>; out ASospeso: TJSONObject): Integer;
     // Aggiunge il turno concluso. ATurno e ASospeso passano all'archivio
@@ -106,7 +66,7 @@ type
     class function EsitiPerStorico(AEsecuzione: TEsitoEsecuzione): TJSONArray;
   end;
 
-  // I tre file del registro (vedi il commento in testa alla unit).
+  // I tre file del registro (vedi l'intestazione).
   TRegistroPianificatore = class
   private
     class var FLog: TTextFileWriter;
@@ -197,7 +157,7 @@ uses
   uLog;
 
 const
-  TTL_STORICO_MINUTI = 60;     // come le conversazioni dell'orchestratore attuale
+  TTL_STORICO_MINUTI = 60;
 
   SISTEMA_CONFERMA =
     'Il gestionale ha proposto all''utente un''operazione e gli ha chiesto conferma. ' +
@@ -209,8 +169,6 @@ const
   SCHEMA_CONFERMA =
     '{"type":"object","properties":{"scelta":{"type":"string",' +
     '"enum":["conferma","annulla","altro"]}},"required":["scelta"]}';
-
-{ TArchivioStorici }
 
 class constructor TArchivioStorici.Create;
 begin
@@ -311,8 +269,6 @@ begin
   end;
 end;
 
-{ TRegistroPianificatore }
-
 const
   INTESTAZIONE_CSV =
     'timestamp;conversation_id;turno;domanda;esito_piano;passi;stato_turno;esecuzione;' +
@@ -372,8 +328,6 @@ begin
       TLog.Write('AGENTE - registro del pianificatore non scrivibile (dettaglio): ' + E.Message);
   end;
 end;
-
-{ TTurnoPianificato }
 
 destructor TTurnoPianificato.Destroy;
 begin
@@ -604,10 +558,8 @@ begin
     .AddPair('passi', LPassi), LRiga);
 end;
 
-// Chiama il modello con ARichiesta (che viene liberata qui) e restituisce il
-// testo della risposta. Registra token e durata nella diagnostica del turno
-// e l'intera chiamata (messaggi inviati, testo ricevuto) nel registro.
-// Un errore del motore (ELLMErrore) sale al controller, come nel ciclo.
+// Chiama il modello con ARichiesta (liberata qui) e ne restituisce il testo. Registra
+// token, durata e chiamata completa nel registro. Un ELLMErrore sale al controller.
 function TTurnoPianificato.ChiamaLLM(AStato: TStatoTurno; ARichiesta: TJSONObject;
   const AFase: string): string;
 var
@@ -686,8 +638,8 @@ begin
   Chiudi(AStato, TSintesiRisposta.TestoPianoNonValido, STATO_CONCLUSO, ESECUZIONE_NON_ESEGUITA);
 end;
 
-// Traccia per il client (ispettore della chat) e per la batteria di test: un
-// tool chiamato davvero, con il risultato nella forma che il frontend conosce.
+// Traccia per il client e la batteria di test: un tool chiamato davvero, con il risultato
+// nella forma che il frontend conosce.
 procedure TTurnoPianificato.AggiungiTraccia(AStato: TStatoTurno; AEsito: TEsitoPasso);
 var
   LTraccia: TTracciaTool;
@@ -752,9 +704,8 @@ var
 begin
   LTool := TestoCampo(FSospeso, 'tool');
 
-  // Risposta data con i pulsanti della chat (vedi TOpzioniTurno.SceltaConferma):
-  // la scelta e' gia' certa, quindi nessuna chiamata al modello. Con il testo
-  // libero resta la chiamata a risposta chiusa (conferma / annulla / altro).
+  // Risposta data con i pulsanti della chat: la scelta e' certa, nessuna chiamata al
+  // modello. Con testo libero resta la chiamata a risposta chiusa.
   if AStato.Opzioni.SceltaConferma <> '' then
   begin
     LSceltaTesto := AStato.Opzioni.SceltaConferma;
@@ -813,9 +764,8 @@ begin
     Exit;
   end;
 
-  // Conferma: si riprende dal passo che era fermo, con i risultati dei passi
-  // gia' eseguiti allora. Gli argomenti sono quelli mostrati all'utente,
-  // perche' vengono ricalcolati dagli stessi risultati.
+  // Conferma: si riprende dal passo fermo, con i risultati dei passi gia' eseguiti. Gli
+  // argomenti sono ricalcolati dagli stessi risultati, quindi uguali a quelli mostrati.
   FEsecutore := TEsecutorePiano.Create(FPiano);
   LOutput := FSospeso.GetValue('output');
   if LOutput is TJSONObject then
@@ -885,8 +835,8 @@ begin
   LNonCoperti := FRetrieval.NonCoperti;
   if Length(LNonCoperti) > 0 then
   begin
-    // Per almeno un'azione il gestionale non ha un tool: non si esegue
-    // niente e il modello spiega all'utente cosa non si puo' fare.
+    // Per almeno un'azione manca un tool: non si esegue niente e il modello spiega cosa non
+    // si puo' fare.
     LPassi := TJSONArray.Create;
     LAzioni := TJSONArray.Create;
     for LId in LNonCoperti do
@@ -927,8 +877,8 @@ begin
   for LVoce in LCandidati do
     FCompletati := FCompletati + [LVoce.Id];
 
-  // ChiamaLLM libera la richiesta: ne teniamo una copia, che serve solo se
-  // bisogna chiedere la correzione.
+  // ChiamaLLM libera la richiesta: se ne tiene una copia, utile se serve chiedere una
+  // correzione.
   LRichiesta := TPianificatore.RichiestaCompletamento(FMessaggiPiano, LCandidati);
   LCopia := LRichiesta.Clone as TJSONObject;
   try
@@ -948,10 +898,9 @@ begin
       end;
     end;
 
-    // Due voci per lo stesso passo (tappa 13): il codice non sceglie fra le
-    // due. Si chiede al modello di correggersi UNA volta sola (niente
-    // cicli); se anche la seconda risposta non e' valida, il turno si chiude
-    // con il testo fisso "piano non valido" e nessun tool viene eseguito.
+    // Due voci per lo stesso passo: il codice non sceglie. Si chiede UNA sola correzione al
+    // modello; se anche la seconda risposta non e' valida il turno si chiude con "piano non
+    // valido" senza eseguire tool.
     if LProblema <> '' then
     begin
       LEvento := TJSONObject.Create;
@@ -998,8 +947,7 @@ begin
     if Length(LTolti) > 0 then
     begin
       FNote := FNote + LNoteDuplicati;
-      // Stessa rinumerazione per le decisioni del retrieval e per l'elenco
-      // dei passi completati.
+      // Stessa rinumerazione per le decisioni del retrieval e per i passi completati.
       if FRetrieval <> nil then
       begin
         for i := FRetrieval.Decisioni.Count - 1 downto 0 do
@@ -1032,8 +980,8 @@ begin
     LMappa.Free;
   end;
 
-  // L'ultimo argomento e' il "testo noto" per il controllo dei valori
-  // ancorati: la domanda di questo turno piu' lo storico visto dal Planner.
+  // Ultimo argomento: testo noto per il controllo dei valori ancorati (domanda + storico
+  // visto dal Planner).
   FErrori := TValidatorePiano.ValidaPiano(FPiano, FRetrieval, FCompletati,
     FDomanda + sLineBreak + FStoricoTesto);
   EventoControlli;
@@ -1073,8 +1021,7 @@ begin
 
   if (LEsito.CodiceArresto = 'CONFERMA_RICHIESTA') and (LUltimo <> nil) then
   begin
-    // Scrittura proposta: si salva tutto cio' che serve per riprenderla
-    // esattamente da qui quando l'utente conferma.
+    // Scrittura proposta: si salva cio' che serve per riprenderla da qui alla conferma.
     LIndice := 0;
     for i := 0 to FPiano.Passi.Count - 1 do
       if FPiano.Passi[i].Id = LUltimo.Id then
@@ -1249,7 +1196,7 @@ begin
   Result := ATesto.Replace(';', ',').Replace(#13, ' ').Replace(#10, ' ');
 end;
 
-// Il registro del turno nei tre file (vedi il commento in testa alla unit).
+// Il registro del turno nei tre file (vedi l'intestazione).
 procedure TTurnoPianificato.ScriviRegistro(AStato: TStatoTurno);
 var
   LDiagnostica: TDiagnosticaTurno;
@@ -1291,8 +1238,8 @@ begin
     LPassi := FPiano.Passi.Count;
   end;
 
-  // 1. Leggibile: un blocco per turno, scritto in una volta sola cosi' i
-  //    turni di conversazioni diverse non si mescolano riga per riga.
+  // 1. Leggibile: un blocco per turno scritto in una volta, cosi' i turni di conversazioni
+  // diverse non si mescolano.
   TRegistroPianificatore.ScriviLog(
     Format('%s  TURNO %d [%s]', [LAdesso, AStato.NumeroTurno, AStato.Esito.ConversationID]) + sLineBreak +
     '  UTENTE: ' + FDomanda + sLineBreak +

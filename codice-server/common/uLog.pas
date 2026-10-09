@@ -63,13 +63,12 @@ begin
 
   LTimestampedMessage := FormatDateTime('dd/mm/yyyy hh:mm:ss.zzz', now) + '   ' + AMessage;
 
-  // Scrittura su file: non tocca componenti VCL, può restare sul thread chiamante
+  // Scrittura su file: non tocca la VCL, resta sul thread chiamante.
   if FVerbosity = vbDettagliataSuFile then
     TFile.AppendAllText(FFullPathFileLog, LTimestampedMessage + sLineBreak);
 
-  // Scrittura sul TMemo: deve essere marshalled sul thread principale,
-  // perché questo metodo può essere invocato anche dai thread di lavoro
-  // del server Indy durante l'elaborazione delle richieste HTTP/MCP
+  // Scrittura sul TMemo: va marshalled sul thread principale, perche' puo' arrivare dai
+  // thread Indy.
   TThread.Queue(nil,
     procedure
     begin

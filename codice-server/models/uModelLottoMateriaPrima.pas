@@ -10,24 +10,14 @@ uses
   DbU;
 
 type
-  // Rappresenta un lotto fisico di materia prima ricevuto da un fornitore
-  // (tabella lotti_materie_prime). E' l'unita' di tracciabilita' minima
-  // usata dallo scenario di ritiro/richiamo (2.1): un lotto puo' essere
-  // dichiarato non conforme, ed e' da un lotto che si risale a quali
-  // prodotti finiti lo contengono (tramite le catene di consumo) e quanta
-  // quantita' e' ancora disponibile in giacenza.
-  //
-  // Note sui tipi: Quantita e QuantitaDisponibile mappano colonne
-  // NUMERIC(10,4) PostgreSQL. Si usa Currency (non Double) perche' e' un
-  // intero scalato a 4 decimali esatti in Delphi: stessa precisione della
-  // colonna DB, senza gli arrotondamenti binari del floating point che
-  // altrimenti, sommati su molti movimenti di magazzino, potrebbero far
-  // divergere QuantitaDisponibile dal valore reale.
-  //
-  // NON ha un campo UnitaMisura proprio: lo eredita dalla riga DDT di
-  // origine (ddt_entrata_righe.unita_misura, tramite DdtEntrataRigaID) —
-  // scelta del DDL per evitare di duplicare/disallineare l'unita' di
-  // misura tra riga DDT e lotto generato da essa.
+  // Lotto fisico di materia prima ricevuto da un fornitore (lotti_materie_prime): l'unita'
+  // minima di tracciabilita' del richiamo (2.1). Da un lotto non conforme si risale ai
+  // prodotti finiti che lo contengono tramite le catene di consumo.
+  // Quantita e QuantitaDisponibile sono NUMERIC(10,4): si usa Currency (intero scalato a 4
+  // decimali) per avere la stessa precisione senza gli arrotondamenti binari del floating
+  // point, che sommati su molti movimenti farebbero divergere la giacenza.
+  // Non ha UnitaMisura: la eredita dalla riga DDT di origine
+  // (ddt_entrata_righe.unita_misura), per non duplicarla.
   TLottoMateriaPrima = class
   private
     FID: Integer;
@@ -52,42 +42,27 @@ type
     property QuantitaDisponibile: Currency read FQuantitaDisponibile write FQuantitaDisponibile;
     property DdtEntrataRigaID: Integer read FDdtEntrataRigaID write FDdtEntrataRigaID;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_lotti_materie_prime_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TLottoMateriaPrima;
     class function GetByCodiceLotto(AMateriaPrimaID: Integer;
       const ACodiceLotto: string): TLottoMateriaPrima;
-    // A differenza di GetByCodiceLotto (che richiede materia_prima_id ed
-    // e' quindi univoca per costruzione, vedi vincolo uq_lotto_materia_prima),
-    // questa cerca SOLO per codice_lotto, senza sapere a quale materia
-    // prima appartiene. Serve al tool MCP di ritiro/richiamo
-    // (uRitiroRichiamoToolProvider.pas), dove il modello riceve dall'utente
-    // un codice lotto testuale e non un id numerico ne' l'id della materia
-    // prima. Puo' restituire piu' di un risultato: uq_lotto_materia_prima
-    // garantisce l'unicita' solo per coppia (materia_prima_id, codice_lotto),
-    // NON globalmente - due materie prime diverse possono avere entrambe un
-    // lotto con lo stesso codice. La lista vuota (nessun match) e' un esito
-    // legittimo, non un errore: il chiamante decide come segnalarlo.
+    // Cerca solo per codice_lotto, senza materia_prima_id (a differenza di
+    // GetByCodiceLotto, univoca per uq_lotto_materia_prima). Serve al tool di
+    // ritiro/richiamo, dove l'utente dice solo il codice. Puo' dare piu' risultati:
+    // l'unicita' vale per coppia (materia_prima_id, codice_lotto), non globalmente. Lista
+    // vuota = esito legittimo, lo segnala il chiamante.
     class function GetByCodiceLottoGlobale(const ACodiceLotto: string): TObjectList<TLottoMateriaPrima>;
     class function GetAll: TObjectList<TLottoMateriaPrima>;
     class function GetByMateriaPrima(AMateriaPrimaID: Integer): TObjectList<TLottoMateriaPrima>;
     class function Delete(AID: Integer): Boolean;
 
-    // Decremento atomico e condizionato della giacenza disponibile.
-    // Pensato per essere chiamato DENTRO una transazione gestita da un
-    // Service (vedi TServizioGiacenza in services/uServiziGiacenza.pas):
-    // riceve una connessione gia' aperta invece di aprirne una pooled
-    // propria, cosi' questa UPDATE e l'INSERT della riga di consumo che
-    // la accompagna possono essere committate o annullate insieme.
-    // La condizione "AND quantita_disponibile >= :quantita" nella WHERE
-    // rende l'operazione sicura anche in concorrenza: o decrementa senza
-    // mai andare sotto zero, o non tocca nessuna riga (Result = False)
-    // se la giacenza non basta — senza una SELECT preventiva che
-    // lascerebbe una finestra di race condition tra lettura e scrittura.
+    // Decremento atomico e condizionato della giacenza. Va chiamato dentro una transazione
+    // di un Service (TServizioGiacenza): riceve la connessione, cosi' UPDATE e INSERT del
+    // consumo condividono commit/rollback. La WHERE "AND quantita_disponibile >= :quantita"
+    // lo rende sicuro in concorrenza: o decrementa senza andare sotto zero, o non tocca
+    // nulla (Result = False), senza una SELECT preventiva che aprirebbe una race condition.
     class function DecrementaQuantitaDisponibile(AID: Integer; AQuantita: Currency;
       AConnection: TFDConnection): Boolean;
 
@@ -106,8 +81,6 @@ const
     'SELECT id, materia_prima_id, codice_lotto, data_scadenza, quantita, ' +
     'quantita_disponibile, ddt_entrata_riga_id, creato_il, aggiornato_il ' +
     'FROM lotti_materie_prime ';
-
-{ TLottoMateriaPrima }
 
 constructor TLottoMateriaPrima.Create;
 begin
@@ -152,9 +125,8 @@ class function TLottoMateriaPrima.GetByCodiceLotto(AMateriaPrimaID: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // Il codice lotto e' univoco solo all'interno della stessa materia
-  // prima (vincolo uq_lotto_materia_prima), non globalmente: due materie
-  // prime diverse possono avere lotti con lo stesso codice.
+  // Il codice lotto e' univoco solo per materia prima (uq_lotto_materia_prima), non
+  // globalmente.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -178,10 +150,8 @@ var
   LAutoQuery: TAutoQuery;
   LLotto: TLottoMateriaPrima;
 begin
-  // Vedi il commento sulla dichiarazione: nessun filtro su materia_prima_id,
-  // puo' restituire 0, 1 o piu' righe. Ordinamento per id (non per data
-  // scadenza come GetByMateriaPrima): qui non ha senso un ordine FEFO, i
-  // risultati possono appartenere a materie prime diverse.
+  // Come dichiarato: nessun filtro su materia_prima_id, 0, 1 o piu' righe. Ordinato per id
+  // e non FEFO: i risultati possono essere di materie prime diverse.
   Result := TObjectList<TLottoMateriaPrima>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -207,9 +177,7 @@ var
 begin
   Result := TObjectList<TLottoMateriaPrima>.Create(True); // possiede gli oggetti
 
-  // Ordinamento per data_scadenza: riflette la logica FEFO (First Expired,
-  // First Out) tipica del settore alimentare, ed e' utile di default per
-  // individuare rapidamente i lotti piu' vicini alla scadenza.
+  // Ordine per data_scadenza (FEFO, First Expired First Out).
   LAutoQuery := TDB.GetInstance.getQueryResult(
     SQL_SELECT_BASE + 'ORDER BY data_scadenza');
   try
@@ -230,11 +198,8 @@ var
   LAutoQuery: TAutoQuery;
   LLotto: TLottoMateriaPrima;
 begin
-  // Tutti i lotti di una specifica materia prima, in ordine FEFO. Utile
-  // sia per la gestione di magazzino ordinaria sia come primo passo dello
-  // scenario di ritiro/richiamo: individuati i lotti di una materia prima
-  // non conforme, si risale da qui ai lotti di semilavorato/prodotto
-  // finito che li hanno consumati.
+  // Lotti di una materia prima, in ordine FEFO. Primo passo del richiamo: dai lotti non
+  // conformi si risale a semilavorati e prodotti finiti.
   Result := TObjectList<TLottoMateriaPrima>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -256,12 +221,8 @@ end;
 
 class function TLottoMateriaPrima.Delete(AID: Integer): Boolean;
 begin
-  // Un lotto e' referenziato da consumi_produzione_semilavorati,
-  // consumi_produzione_prodotti_finiti e non_conformita: in assenza di
-  // ON DELETE CASCADE lato DB, la query fallisce se il lotto e' gia'
-  // stato usato in produzione o coinvolto in una non conformita'.
-  // Comportamento voluto: un lotto movimentato non va cancellato, e' un
-  // dato di tracciabilita'.
+  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
+  // perdere dati di tracciabilita'.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM lotti_materie_prime WHERE id = :id', [AID]);
 end;
@@ -271,11 +232,8 @@ class function TLottoMateriaPrima.DecrementaQuantitaDisponibile(AID: Integer;
 var
   LQuery: TFDQuery;
 begin
-  // Query parametrica costruita a mano (non tramite TDB.GetInstance,
-  // che aprirebbe una connessione pooled propria): usiamo direttamente
-  // AConnection perche' questa UPDATE deve far parte della transazione
-  // gia' avviata dal chiamante (tipicamente TServizioGiacenza), non di
-  // una transazione a se stante.
+  // Query a mano su AConnection e non su una connessione pooled: la UPDATE deve stare nella
+  // transazione del chiamante.
   LQuery := TFDQuery.Create(nil);
   try
     LQuery.Connection := AConnection;
@@ -287,10 +245,8 @@ begin
     LQuery.ParamByName('id').AsInteger := AID;
     LQuery.ExecSQL;
 
-    // RowsAffected = 0 significa che il lotto non esiste oppure che
-    // AQuantita supera la giacenza disponibile: in entrambi i casi la
-    // UPDATE non ha toccato nulla, quindi Result = False segnala al
-    // chiamante di annullare l'intera operazione (consumo/spedizione).
+    // RowsAffected = 0: lotto inesistente o AQuantita oltre la giacenza. Result = False
+    // dice al chiamante di annullare l'intera operazione.
     Result := LQuery.RowsAffected > 0;
   finally
     LQuery.Free;
@@ -301,14 +257,7 @@ function TLottoMateriaPrima.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
-  // Il DB ha DEFAULT 0 su quantita_disponibile, ma e' solo una garanzia
-  // di NOT NULL: per un lotto appena ricevuto la regola di business e'
-  // che la quantita' disponibile parta uguale alla quantita' ricevuta.
-  // E' responsabilita' del chiamante impostare QuantitaDisponibile
-  // (tipicamente = Quantita) prima di chiamare Insert; qui la
-  // valorizziamo comunque esplicitamente per non affidarci al default.
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO lotti_materie_prime ' +
     '(materia_prima_id, codice_lotto, data_scadenza, quantita, ' +
@@ -332,10 +281,7 @@ function TLottoMateriaPrima.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_lotti_materie_prime_aggiornato_il lo valorizza automaticamente.
-  // Questo e' anche il metodo con cui, in pratica, si aggiorna
-  // QuantitaDisponibile ad ogni consumo/scarico (vedi commento di classe).
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE lotti_materie_prime SET materia_prima_id = :materia_prima_id, ' +
     'codice_lotto = :codice_lotto, data_scadenza = :data_scadenza, ' +
@@ -385,8 +331,7 @@ var
   LValStr: string;
   LValDate: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('materia_prima_id', LValInt) then
     FMateriaPrimaID := LValInt;
   if AJSON.TryGetValue<string>('codice_lotto', LValStr) then
@@ -396,8 +341,7 @@ begin
   if AJSON.TryGetValue<Integer>('ddt_entrata_riga_id', LValInt) then
     FDdtEntrataRigaID := LValInt;
 
-  // I campi numerici decimali si leggono come TJSONNumber per
-  // preservarne la precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita', LValDate) and (LValDate is TJSONNumber) then
     FQuantita := TJSONNumber(LValDate).AsDouble;
   if AJSON.TryGetValue<TJSONValue>('quantita_disponibile', LValDate) and (LValDate is TJSONNumber) then

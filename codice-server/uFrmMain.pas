@@ -63,13 +63,10 @@ begin
   TDB.Initialize(oConfig.DatabaseConfig);        // 2. registra i parametri del pool
   TDB.GetInstance.getQueryResult('SELECT 1');    // 3. solo ora � sicuro usare il pool
 
-  // Configurazione e registrazione tool del server MCP: va fatta una sola
-  // volta per processo (TMCPServer.Instance e' un singleton, e
-  // RegisterToolProvider solleva "Duplicate tool name" se richiamato due
-  // volte sullo stesso provider). WebModuleCreate gira invece una volta
-  // per ogni worker thread Indy, quindi NON e' il posto giusto: qui in
-  // FormCreate viene eseguito esattamente una volta, prima che il server
-  // inizi ad accettare richieste.
+  // Configurazione e registrazione dei tool MCP: una sola volta per processo.
+  // TMCPServer.Instance e' un singleton e RegisterToolProvider solleva "Duplicate tool
+  // name" se richiamato; WebModuleCreate gira per ogni worker Indy, quindi qui in
+  // FormCreate.
   TMCPServer.Instance.ServerName := 'AziendaAlimentareERP';
   TMCPServer.Instance.ServerVersion := '1.0.0';
   TMCPServer.Instance.ServerInstructions :=
@@ -77,14 +74,12 @@ begin
     '(vendite, tracciabilita'', ricette). Nessun accesso diretto al database e'' concesso al modello: ' +
     'ogni operazione passa da un tool con parametri tipizzati.';
   TMCPServer.Instance.RegisterToolProvider(TVenditeToolProvider);
-  // Contratti dei tool del provider (output, effetto, conferma, vincoli) per il
-  // pianificatore: registrati accanto al provider, vedi agente_ai/tool/uContrattiTool.pas.
+  // Contratti dei tool (output, effetto, conferma, vincoli) per il pianificatore,
+  // registrati accanto al provider (uContrattiTool.pas).
   TRegistroContrattiTool.Registra(TVenditeToolProvider.ContrattiTool);
 
-  // Descrizione del provider per la selezione a monte da parte dell'LLM
-  // (vedi agente_ai/tool/uRegistroProviderMCP.pas): registrata qui, accanto alla
-  // riga che registra davvero il provider nel server MCP, cosi' le due
-  // cose non possono disallinearsi.
+  // Descrizione del provider per la selezione a monte (uRegistroProviderMCP.pas),
+  // registrata accanto alla registrazione MCP perche' non si disallineino.
   TRegistroProviderMCP.Registra('vendite',
     'Interrogazioni sui dati di vendita del gestionale: ordini di vendita e le relative ' +
     'righe prodotto, filtrabili per cliente, prodotto e periodo. Usa questo provider per ' +
@@ -93,10 +88,7 @@ begin
     'serve anche il provider "file".',
     ['get_list_vendite']);
 
-  // TClientiToolProvider (agente_ai/tool/uClientiToolProvider.pas): get_cliente,
-  // anagrafica di un cliente cercato per id, partita IVA o ragione sociale.
-  // Provider RTTI come TVenditeToolProvider (solo parametri stringa), quindi
-  // RegisterToolProvider con la CLASSE, non RegisterDynamicProvider.
+  // Provider RTTI (solo parametri stringa): RegisterToolProvider con la classe.
   TMCPServer.Instance.RegisterToolProvider(TClientiToolProvider);
   TRegistroContrattiTool.Registra(TClientiToolProvider.ContrattiTool);
 
@@ -109,11 +101,8 @@ begin
     'provider "vendite".',
     ['get_cliente']);
 
-  // TEmailToolProvider (agente_ai/tool/uEmailToolProvider.pas): invia_email,
-  // tool generico (destinatari, oggetto, testo scritti dal modello). Dinamico
-  // perche' "destinatari" e' un array. Nel contratto e' una scrittura con
-  // conferma: l'utente vede il messaggio prima che parta. Usa TEmailServer e
-  // la sezione [SMTP] dell'ini.
+  // Dinamico perche' "destinatari" e' un array. Nel contratto e' una scrittura con
+  // conferma. Usa TEmailServer e [SMTP].
   TMCPServer.Instance.RegisterDynamicProvider(TEmailToolProvider.Create);
   TRegistroContrattiTool.Registra(TEmailToolProvider.ContrattiTool);
 
@@ -124,9 +113,8 @@ begin
     'di un cliente si legge prima con il provider "clienti". Comprende anche anteprima e ' +
     'invio di email a TESTO FISSO composte da un modello (es. le comunicazioni di ' +
     'ritiro/richiamo ai clienti): li'' il testo non lo scrive l''agente. ' +
-    // 04/10/2026 (run 4, S1-F): il Planner vede la descrizione del PROVIDER
-    // (quella del tool solo dopo che il tool e' stato usato), quindi la
-    // dipendenza va ripetuta anche qui.
+    // 04/10/2026 (run 4, S1-F): il Planner vede la descrizione del provider (quella del
+    // tool solo dopo averlo usato), quindi la dipendenza va ripetuta anche qui.
     'Anteprima o invio delle comunicazioni di ritiro/richiamo richiedono SEMPRE DUE passi ' +
     'nello stesso piano: prima la verifica delle spedizioni del provider "ritiro_richiamo" ' +
     'sui lotti di prodotto finito coinvolti, poi l''anteprima (o l''invio) con l''elenco ' +
@@ -134,16 +122,9 @@ begin
     'fatta in un turno precedente: si ripete.',
     ['invia_email', 'anteprima_email_da_modello', 'invia_email_da_modello']);
 
-  // TFilesToolsProvider espone tool "dinamici" (generate_csv/generate_pdf,
-  // parametri array/object veri - vedi commento in testa a
-  // uFilesToolsProvider.pas) e per questo si registra con
-  // RegisterDynamicProvider, non RegisterToolProvider: a differenza dei
-  // provider RTTI (una nuova istanza per ogni chiamata, vedi
-  // TMCPRequestHandler.DoToolsCall), RegisterDynamicProvider prende
-  // possesso di UN'ISTANZA che vive per tutta la durata del processo e
-  // viene richiamata concorrentemente da thread diversi - per questo
-  // InvokeDynamic non deve mai leggere/scrivere stato d'istanza (nessun
-  // campo mutabile in TFilesToolsProvider, solo variabili locali).
+  // Provider dinamico (parametri array/object veri): RegisterDynamicProvider. A differenza
+  // dei provider RTTI (istanza nuova per chiamata, TMCPRequestHandler.DoToolsCall) prende
+  // un'istanza unica usata da piu' thread: InvokeDynamic non deve usare stato d'istanza.
   TMCPServer.Instance.RegisterDynamicProvider(TFilesToolsProvider.Create);
   TRegistroContrattiTool.Registra(TFilesToolsProvider.ContrattiTool);
 
@@ -158,13 +139,8 @@ begin
     'in un turno precedente: il primo passo ripete quella lettura con gli stessi filtri.',
     ['generate_csv', 'generate_pdf']);
 
-  // apri_vista (agente_ai/tool/uNavigazioneToolProvider.pas): tool generico, uguale
-  // per tutti gli scenari, che permette al modello di segnalare "apri
-  // questa schermata per questa entita'" senza sapere nulla di ricette,
-  // vendite o ritiro/richiamo - legge solo TRegistroViste (common/
-  // uRegistroViste.pas). Registrato come dynamic provider per lo stesso
-  // motivo di TFilesToolsProvider (parametro "parametri" e' un oggetto
-  // vero, non esprimibile via RTTI).
+  // apri_vista: tool generico per tutti gli scenari, legge solo TRegistroViste. Dinamico
+  // perche' "parametri" e' un oggetto vero.
   TMCPServer.Instance.RegisterDynamicProvider(TNavigazioneToolProvider.Create);
   TRegistroContrattiTool.Registra(TNavigazioneToolProvider.ContrattiTool);
 
@@ -176,13 +152,8 @@ begin
     'riassunto in chat e conviene mostrarlo nell''interfaccia grafica.',
     ['apri_vista']);
 
-  // TRicetteToolProvider (scenario 3, adattamento ricette): get_ricetta_
-  // prodotto_finito, cerca_componenti_ricetta, simula_adattamento_ricetta,
-  // applica_adattamento_ricetta. Tutti e quattro dichiarati "dinamici" nello
-  // stesso provider (vedi il commento in testa a uRicetteToolProvider.pas
-  // sul perche' - il parametro "sostituzioni" e' un array vero), quindi si
-  // registra con RegisterDynamicProvider come TFilesToolsProvider/
-  // TNavigazioneToolProvider, non con RegisterToolProvider.
+  // Scenario 3. Tutti i tool dichiarati dinamici nello stesso provider ("sostituzioni" e'
+  // un array): RegisterDynamicProvider.
   TMCPServer.Instance.RegisterDynamicProvider(TRicetteToolProvider.Create);
   TRegistroContrattiTool.Registra(TRicetteToolProvider.ContrattiTool);
 
@@ -196,11 +167,8 @@ begin
     ['get_ricetta_prodotto_finito', 'cerca_componenti_ricetta', 'simula_adattamento_ricetta',
      'applica_adattamento_ricetta']);
 
-  // Vista aperta da applica_adattamento_ricetta (tramite apri_vista) dopo
-  // aver creato o individuato una variante: mostra l'anagrafica del
-  // prodotto finito risultante con la sua ricetta corrente. Registrata qui
-  // insieme al tool provider a cui appartiene, stesso principio delle
-  // altre righe di questo blocco.
+  // Vista aperta da applica_adattamento_ricetta (via apri_vista): anagrafica del prodotto
+  // finito risultante con la ricetta corrente.
   TRegistroViste.Registra('ricetta_prodotto_finito',
     'Scheda anagrafica di un prodotto finito con la ricetta CORRENTE (versione, componenti, ' +
     'dosi). Apri questa vista dopo una scrittura di scenario 3 (nuova variante creata o ' +
@@ -208,14 +176,7 @@ begin
     'parole.',
     ['prodotto_finito_id']);
 
-  // TRitiroRichiamoToolProvider (scenario 1, ritiro/richiamo prodotti non
-  // conformi): apri_non_conformita_materia_prima,
-  // trova_ordini_spedizioni_lotto_prodotto_finito. Entrambi "dinamici"
-  // (parametro "codici_lotto_materia_prima"/"lotti_prodotto_finito_id" e'
-  // un array vero - vedi il commento in testa a
-  // uRitiroRichiamoToolProvider.pas), quindi RegisterDynamicProvider come
-  // TFilesToolsProvider/TNavigazioneToolProvider/TRicetteToolProvider, non
-  // RegisterToolProvider.
+  // Scenario 1. Entrambi dinamici (parametri array): RegisterDynamicProvider.
   TMCPServer.Instance.RegisterDynamicProvider(TRitiroRichiamoToolProvider.Create);
   TRegistroContrattiTool.Registra(TRitiroRichiamoToolProvider.ContrattiTool);
 
@@ -235,21 +196,10 @@ begin
     'implementata.',
     ['apri_non_conformita_materia_prima', 'trova_ordini_spedizioni_lotto_prodotto_finito']);
 
-  // Le due viste seguenti (anagrafica prodotto finito/semilavorato, senza
-  // ricetta) erano registrate qui come stopgap prima che esistesse un
-  // provider "proprietario" di scenario 1 - vedi la nota storica in
-  // uRitiroRichiamoToolProvider.pas. Spostate qui sotto la registrazione
-  // vera del provider a cui appartengono, stesso principio gia' seguito da
-  // uRicetteToolProvider per 'ricetta_prodotto_finito' sopra: restano
-  // dichiarate in uFrmMain (nessun tool le usa direttamente, sono aperte
-  // dal frontend via apri_vista indipendentemente da quale tool ha
-  // prodotto il risultato), ma accanto al provider che le rende rilevanti.
-  //
-  // A differenza di 'ricetta_prodotto_finito' (ricetta CORRENTE), queste
-  // aprono la scheda ANAGRAFICA pura (codice, allergeni, scadenza standard
-  // per i prodotti finiti): utili quando l'esito di un'operazione riguarda
-  // l'anagrafica stessa (es. individuazione del prodotto/semilavorato
-  // coinvolto in una non conformita', prima ancora di toccarne la ricetta).
+  // Viste anagrafica prodotto finito/semilavorato (senza ricetta): aperte dal frontend via
+  // apri_vista, a prescindere dal tool che ha prodotto il risultato. A differenza di
+  // 'ricetta_prodotto_finito' mostrano la scheda anagrafica pura (codice, allergeni,
+  // scadenza standard).
   TRegistroViste.Registra('prodotto_finito',
     'Scheda anagrafica di un prodotto finito (codice, denominazione, scadenza standard, ' +
     'allergeni dichiarati, eventuale prodotto padre se e'' una variante). NON mostra la ' +
@@ -262,29 +212,15 @@ begin
     'solo dall''interfaccia umana (/ricette/semilavorati/(id)), non tramite apri_vista.',
     ['semilavorato_id']);
 
-  // NOTA PER LA RELAZIONE DI TIROCINIO: 'vendite' e 'dashboard' esistono e
-  // funzionano lato frontend ma NON vengono registrate qui, per scelta di
-  // design gia' documentata in testa a uRegistroViste.pas: i dati di
-  // TVenditeToolProvider (scenario 2) stanno gia' bene in una tabella
-  // dentro la chat, quindi aprire una vista aggiuntiva per lo stesso
-  // risultato sarebbe ridondante; 'dashboard' non e' legata a un'entita'
-  // specifica restituita da un tool, quindi non ha un "parametro" sensato
-  // da ricevere da apri_vista. Se in futuro servisse comunque un link alla
-  // dashboard o all'elenco vendite filtrato, la registrazione andrebbe qui
-  // accanto, con ChiaviRichieste vuoto o pari ai filtri di
-  // TServizioVendite.
+  // 'dashboard' non e' registrata: non e' legata a un'entita' restituita da un tool, quindi
+  // non ha un parametro sensato per apri_vista.
 
-  // AGGIORNAMENTO 02/10/2026 - la nota qui sopra e' superata per 'vendite'.
-  // Con il pianificatore la tabella in chat non c'e' piu' sempre (la sintesi
-  // racconta i dati, e oltre le prime righe li riduce): aprire l'elenco gia'
-  // filtrato e' un approfondimento utile, non un doppione. Le due viste
-  // qui sotto vengono proposte in due modi:
-  //  - dal modello, con apri_vista ("apri le vendite di febbraio");
-  //  - dal codice, con "apertura_vista"/"aperture_vista" nel risultato di
-  //    get_list_vendite e apri_non_conformita_materia_prima (pulsante in
-  //    chat, vedi i due provider): non dipende dal modello.
-  // I nomi devono combaciare con App.RegistroViste.registra nel frontend
-  // (views/view-vendite.js, views/view-tracciabilita.js).
+  // 'vendite' e 'tracciabilita' sono registrate: con il pianificatore la tabella in chat
+  // non c'e' sempre, e aprire l'elenco gia' filtrato e' un approfondimento. Le viste sono
+  // proposte dal modello (apri_vista) e dal codice ("apertura_vista"/"aperture_vista" in
+  // get_list_vendite e apri_non_conformita_materia_prima, come pulsante in chat). I nomi
+  // devono combaciare con App.RegistroViste.registra nel frontend (views/view-vendite.js,
+  // views/view-tracciabilita.js).
   TRegistroViste.Registra('vendite',
     'Elenco degli ordini di vendita, filtrabile. Nessun parametro obbligatorio; in ' +
     '"parametri" si possono indicare i filtri facoltativi cliente_id, prodotto_id, ' +
@@ -297,41 +233,19 @@ begin
     '"materia_prima", "semilavorato", "prodotto_finito"; lotto_id e'' l''id numerico del lotto.',
     ['tipo_lotto', 'lotto_id']);
 
-  // Catalogo dei tool per l'orchestratore: costruito QUI, dopo tutte le
-  // registrazioni sopra e prima di doStartServer, perche' fotografa i tool
-  // presenti nel server MCP in questo istante e non viene piu' ricostruito
-  // (vedi agente_ai/tool/uCatalogoTool.pas). Un provider registrato dopo questa
-  // riga non finirebbe mai nell'elenco mandato al modello.
-  //
-  // Nel protocollo MCP "tools/list" e' fatto per essere chiamato una volta
-  // e messo in cache dal client - esiste apposta la notifica
-  // "notifications/tools/list_changed" per invalidarla. Interrogarlo ad
-  // ogni turno di conversazione, come faceva TServizioAgente prima, non era
-  // "piu' MCP": era solo lavoro ripetuto per ottenere sempre lo stesso
-  // risultato.
+  // Catalogo dei tool costruito qui, dopo tutte le registrazioni e prima di doStartServer:
+  // fotografa i tool presenti e non viene ricostruito (uCatalogoTool.pas). Un provider
+  // registrato dopo non arriverebbe mai al modello.
   TCatalogoTool.Costruisci;
   TLog.Write(Format('Catalogo tool MCP costruito: %d tool disponibili.',
     [TCatalogoTool.Conteggio]));
 
-  // Fase 1 dell'orchestratore (retrieval semantico): allinea
-  // mcp_tool_indice ai tool appena fotografati sopra da TCatalogoTool.
-  // Va DOPO quella chiamata (le serve l'elenco reale per convalidare le
-  // righe) - vedi il commento in testa a uIndiceEmbeddingTool.pas.
-  //
-  // AVVIO ROBUSTO: prima un errore qui (LM Studio spento o modello di
-  // embedding non caricato) interrompeva FormCreate PRIMA di doStartServer:
-  // la finestra restava aperta ma il server non apriva mai la porta HTTP.
-  // Con l'inferenza spostata sul PC dell'utente (vedi il documento di
-  // progetto "inferenza sul PC dell'utente") il server puo' girare su una
-  // macchina senza alcun LM Studio, quindi la sincronizzazione NON deve
-  // piu' essere bloccante:
-  //   - l'errore viene scritto nel log, ben visibile;
-  //   - la tabella mcp_tool_indice resta com'era (Sincronizza scrive in
-  //     un'unica transazione: o tutto o niente);
-  //   - in conversazione SelezionaToolPerDomanda, se la ricerca semantica fallisce,
-  //     ripiega gia' da solo sull'intero catalogo dei tool per quel turno.
-  // Il server resta quindi pienamente funzionante, solo senza la riduzione
-  // dei tool della fase 1 finche' gli embedding non tornano disponibili.
+  // Fase 1 (retrieval semantico): allinea mcp_tool_indice ai tool del catalogo. Va dopo il
+  // catalogo, che fornisce l'elenco reale per convalidare le righe. Non bloccante: se
+  // l'embedding non risponde (LM Studio spento, modello non caricato) l'errore va nel log e
+  // l'avvio continua. mcp_tool_indice resta com'era (Sincronizza e' una sola transazione) e
+  // SelezionaToolPerDomanda ripiega sull'intero catalogo. Il server funziona, solo senza la
+  // riduzione dei tool.
   try
     TIndiceEmbeddingTool.Sincronizza;
   except
@@ -359,33 +273,25 @@ procedure TFrmMain.doStartServer;
 begin
   if FServer.Active then
   begin
-    //TLog.Write('Server gi� attivo.');
     Exit;
   end;
 
   IsMultiThread := True;
 
-  // Registra la classe WebModule presso il dispatcher di WebBroker: senza
-  // questa riga, TIdHTTPWebBrokerBridge non sa quale WebModule istanziare
-  // per ogni richiesta e solleva EWebBrokerException 'No data modules
-  // registered' alla prima richiesta in arrivo. WebModuleClass e'
-  // dichiarata in uWebModule.pas (= TWebModule1).
+  // Registra la classe WebModule presso WebBroker: senza, TIdHTTPWebBridge non sa quale
+  // WebModule istanziare e solleva 'No data modules registered' alla prima richiesta.
   if WebRequestHandler <> nil then
     WebRequestHandler.WebModuleClass := WebModuleClass;
 
-  // Porta letta da config.ini (sezione [Server], HttpPort) invece di un
-  // valore fisso: prima coincidevano per caso (entrambi 8080), ma con due
-  // fonti separate cambiare l'ini non avrebbe mai spostato la porta
-  // reale del server - vedi anche l'URL MCP che LM Studio deve chiamare.
+  // Porta da config.ini ([Server] HttpPort), non fissa: con due fonti separate cambiare
+  // l'ini non sposterebbe la porta reale.
   FServer.DefaultPort := oConfig.HttpPort;
   WebRequestHandlerProc.MaxConnections := 1024;
   FServer.Active := True;
 
   TLog.Write('Server MCP avviato su http://localhost:' + oConfig.HttpPort.ToString);
-  // StatusBar e' in modalita' SimplePanel (vedi .dfm: SimplePanel = True,
-  // Panels = <> vuoto): il testo va scritto in SimpleText, non in
-  // Panels[0].Text, che qui solleverebbe un EListError (indice fuori
-  // range su una collezione vuota) mascherando il vero stato del server.
+  // StatusBar e' SimplePanel (vedi .dfm): il testo va in SimpleText; Panels[0] solleverebbe
+  // EListError mascherando lo stato del server.
   StatusBar.SimpleText := 'Server: attivo';
 end;
 
@@ -394,7 +300,6 @@ begin
   if FServer.Active then
   begin
     FServer.Active := False;
-    //TLog.Write('Server fermato.');
     StatusBar.SimpleText := 'Server: fermo';
   end;
 end;

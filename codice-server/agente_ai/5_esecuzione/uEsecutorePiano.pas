@@ -1,39 +1,18 @@
 unit uEsecutorePiano;
 
-(* ============================================================================
-  ESECUTORE DEL PIANO - tappa 7 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/executor.py e
-  dell'adattamento dei risultati dei tool di mcp_delphi.py (funzione esegui).
-  Specifica: CONTRATTI.md, paragrafo 7.
-
-  -- Cosa fa -------------------------------------------------------------------
-  Esegue i passi di un piano GIA' VALIDATO, in ordine, senza chiamare il
-  modello. Per ogni passo:
-    1. risolve i riferimenti "$N.campo" con i risultati VERI dei passi
-       precedenti (uRiferimentiPiano.RisolviArgomenti) e ricontrolla gli
-       argomenti contro lo schema di input;
-    2. se il tool SCRIVE e richiede conferma, parte solo se l'utente ha
-       confermato; altrimenti il piano si ferma (CONFERMA_RICHIESTA);
-    3. esegue il tool (TMCPBridge.EseguiTool);
-    4. classifica il risultato: errore, richiesta di disambiguazione, oppure
-       risultato valido, che deve rispettare l'output_schema del contratto.
-  Al primo arresto i passi successivi NON vengono eseguiti.
-
-  -- Codici di arresto (gli stessi del prototipo) -------------------------------
-    RIF_...               un riferimento non si risolve (vedi uRiferimentiPiano;
-                          RIF_VUOTO = "nessun elemento", esito normale)
-    CONFERMA_RICHIESTA    scrittura proposta, si aspetta la conferma
-    ERRORE_TOOL           il tool ha risposto con un errore
-    DISAMBIGUAZIONE       il tool chiede all'utente di scegliere fra candidati
-    OUTPUT_NON_CONFORME   il risultato non rispetta l'output_schema dichiarato
-
-  -- Un passo alla volta ---------------------------------------------------------
-  Nel prototipo l'esecuzione era un ciclo unico. Qui EseguiProssimoPasso
-  esegue UN passo e torna: il turno a passi (agente_ai/1_turno) lo chiama una
-  volta per richiesta del client, cosi' la chat mostra ogni tool man mano che
-  viene eseguito, come gia' fa oggi. EseguiTutto e' lo stesso ciclo del
-  prototipo, per chi non ha bisogno dei passi.
-  ============================================================================ *)
+// Esecutore del piano. Esegue i passi di un piano gia' validato, in ordine, senza chiamare
+// il modello. Per ogni passo: (1) risolve i riferimenti "$N.campo" con i risultati veri dei
+// passi precedenti e ricontrolla gli argomenti contro lo schema di input; (2) se il tool
+// SCRIVE e richiede conferma, parte solo se l'utente ha confermato, altrimenti il piano si
+// ferma (CONFERMA_RICHIESTA); (3) esegue il tool (TMCPBridge.EseguiTool); (4) classifica il
+// risultato: errore, richiesta di disambiguazione o risultato valido (conforme
+// all'output_schema). Al primo arresto i passi successivi non si eseguono.
+// Codici di arresto: RIF_... (riferimento non risolto; RIF_VUOTO = nessun elemento, esito
+// normale), CONFERMA_RICHIESTA, ERRORE_TOOL, DISAMBIGUAZIONE (il tool chiede di scegliere
+// fra candidati), OUTPUT_NON_CONFORME.
+// EseguiProssimoPasso esegue UN passo e torna: il turno a passi lo chiama una volta per
+// richiesta del client, cosi' la chat mostra ogni tool man mano. EseguiTutto e' il ciclo
+// completo.
 
 interface
 
@@ -98,13 +77,12 @@ type
     constructor Create(APiano: TPiano);
     destructor Destroy; override;
 
-    // RIPRESA dopo una conferma (tappa 9). Un piano fermo su una scrittura
-    // non si riesegue dall'inizio: i passi gia' fatti potrebbero essere a
-    // loro volta scritture. Si riparte dal passo AIndicePasso (indice in
-    // Piano.Passi, da 0) con i risultati che i passi precedenti avevano
-    // prodotto ALLORA (AOutputPrecedenti: {"<id passo>": <output>}, resta
-    // del chiamante), cosi' i riferimenti danno gli stessi valori mostrati
-    // all'utente. Va chiamata prima di eseguire.
+    // RIPRESA dopo una conferma: un piano fermo su una scrittura non si riesegue
+    // dall'inizio (i passi gia' fatti potrebbero essere scritture). Si riparte dal passo
+    // AIndicePasso (indice in Piano.Passi, da 0) con i risultati che i passi precedenti
+    // avevano prodotto allora (AOutputPrecedenti: {"<id passo>": <output>}, del chiamante),
+    // cosi' i riferimenti danno gli stessi valori mostrati all'utente. Va chiamata prima di
+    // eseguire.
     procedure RiprendiDa(AIndicePasso: Integer; AOutputPrecedenti: TJSONObject);
     // I risultati dei passi riusciti, compresi quelli ripresi:
     // {"<id passo>": <output>}. Copia, del chiamante.
@@ -186,16 +164,12 @@ begin
   end;
 end;
 
-{ TEsitoPasso }
-
 destructor TEsitoPasso.Destroy;
 begin
   ArgomentiRisolti.Free;
   Output.Free;
   inherited;
 end;
-
-{ TEsitoEsecuzione }
 
 constructor TEsitoEsecuzione.Create;
 begin
@@ -217,8 +191,6 @@ begin
   else
     Result := Stato;
 end;
-
-{ TEsecutorePiano }
 
 constructor TEsecutorePiano.Create(APiano: TPiano);
 begin

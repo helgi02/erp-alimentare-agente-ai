@@ -10,26 +10,16 @@ uses
   DbU;
 
 type
-  // Rappresenta una riga/componente di una versione di ricetta di
-  // semilavorato (tabella ricette_semilavorati_righe). Modella un nodo
-  // di un albero di distinta base: il componente e' ESATTAMENTE UNO tra
-  // - una materia prima (MateriaPrimaID valorizzato): componente foglia
-  // - un altro semilavorato (SemilavoratoFiglioID valorizzato): nodo
-  //   ricorsivo, che ha a sua volta una propria ricetta con le proprie
-  //   righe
-  // Il DDL impone questo XOR con un CHECK constraint
-  // (chk_componente_semilavorato); lo ripetiamo qui lato Delphi in
-  // EnsureComponenteValido per fallire con un errore leggibile PRIMA di
-  // arrivare al DB, invece di lasciare che sia PostgreSQL a rifiutare
-  // l'INSERT con un errore meno chiaro per chi chiama (incluso un tool
-  // MCP che compone questi dati da una richiesta in linguaggio naturale).
-  //
-  // MateriaPrimaID e SemilavoratoFiglioID usano 0 come sentinella per
-  // NULL, stesso criterio di ValidaAl in TRicettaSemilavorato.
-  //
-  // UnitaMisuraDose puo' differire dall'unita' di misura di magazzino
-  // del componente (es. dose in grammi per una materia prima che si
-  // acquista e stocca in kg): e' un dato voluto, non un errore.
+  // Componente di una versione di ricetta di semilavorato (ricette_semilavorati_righe),
+  // nodo di un albero di distinta base: esattamente uno fra una materia prima
+  // (MateriaPrimaID, foglia) e un altro semilavorato (SemilavoratoFiglioID, nodo ricorsivo
+  // con una propria ricetta). Il DDL lo impone con chk_componente_semilavorato;
+  // EnsureComponenteValido lo ripete per fallire con un errore leggibile prima del DB
+  // (anche per un tool MCP).
+  // MateriaPrimaID e SemilavoratoFiglioID usano 0 per NULL, come ValidaAl in
+  // TRicettaSemilavorato.
+  // UnitaMisuraDose puo' differire da quella di magazzino (es. dose in grammi per una
+  // materia prima in kg): voluto.
   TRicettaSemilavoratoRiga = class
   private
     FID: Integer;
@@ -55,12 +45,9 @@ type
     property UnitaMisuraDose: string read FUnitaMisuraDose write FUnitaMisuraDose;
     property IsComponenteMateriaPrima: Boolean read GetIsComponenteMateriaPrima;
 
-    // Campi di audit: sola lettura, gestiti dal database (default/trigger
-    // trg_ricette_semilavorati_righe_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TRicettaSemilavoratoRiga;
     class function GetByRicetta(ARicettaID: Integer): TObjectList<TRicettaSemilavoratoRiga>;
     class function Delete(AID: Integer): Boolean;
@@ -81,8 +68,6 @@ const
     'quantita_standard, unita_misura_dose, creato_il, aggiornato_il ' +
     'FROM ricette_semilavorati_righe ';
 
-{ TRicettaSemilavoratoRiga }
-
 constructor TRicettaSemilavoratoRiga.Create;
 begin
   inherited Create;
@@ -98,8 +83,8 @@ end;
 
 procedure TRicettaSemilavoratoRiga.EnsureComponenteValido;
 begin
-  // Replica lato Delphi il CHECK chk_componente_semilavorato: esattamente
-  // uno tra MateriaPrimaID e SemilavoratoFiglioID deve essere valorizzato.
+  // Replica il CHECK chk_componente_semilavorato: esattamente uno fra MateriaPrimaID e
+  // SemilavoratoFiglioID.
   if (FMateriaPrimaID <> 0) = (FSemilavoratoFiglioID <> 0) then
     raise Exception.Create(
       'TRicettaSemilavoratoRiga: la riga deve avere ESATTAMENTE uno tra ' +
@@ -151,8 +136,7 @@ var
   LAutoQuery: TAutoQuery;
   LRiga: TRicettaSemilavoratoRiga;
 begin
-  // Modalita' d'accesso principale: le righe si consultano sempre
-  // insieme alla testata ricetta a cui appartengono.
+  // Le righe si consultano sempre con la testata a cui appartengono.
   Result := TObjectList<TRicettaSemilavoratoRiga>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -173,9 +157,7 @@ end;
 
 class function TRicettaSemilavoratoRiga.Delete(AID: Integer): Boolean;
 begin
-  // Nessun'altra tabella referenzia ricette_semilavorati_righe come FK:
-  // e' un nodo foglia nello schema, la cancellazione non incontra
-  // vincoli di integrita' referenziale da parte di altre tabelle.
+  // Nodo foglia: nessuna FK lo referenzia.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ricette_semilavorati_righe WHERE id = :id', [AID]);
 end;
@@ -190,8 +172,7 @@ begin
   if FMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FMateriaPrimaID;
   if FSemilavoratoFiglioID = 0 then LSemilavoratoFiglioParam := Null else LSemilavoratoFiglioParam := FSemilavoratoFiglioID;
 
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ricette_semilavorati_righe ' +
     '(ricetta_id, materia_prima_id, semilavorato_figlio_id, quantita_standard, unita_misura_dose) ' +
@@ -218,9 +199,7 @@ begin
   if FMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FMateriaPrimaID;
   if FSemilavoratoFiglioID = 0 then LSemilavoratoFiglioParam := Null else LSemilavoratoFiglioParam := FSemilavoratoFiglioID;
 
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_ricette_semilavorati_righe_aggiornato_il lo valorizza
-  // automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ricette_semilavorati_righe SET ricetta_id = :ricetta_id, ' +
     'materia_prima_id = :materia_prima_id, ' +
@@ -274,8 +253,7 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('ricetta_id', LValInt) then
     FRicettaID := LValInt;
   if AJSON.TryGetValue<Integer>('materia_prima_id', LValInt) then
@@ -285,8 +263,7 @@ begin
   if AJSON.TryGetValue<string>('unita_misura_dose', LValStr) then
     FUnitaMisuraDose := LValStr;
 
-  // Campo numerico decimale: letto come TJSONNumber per preservarne la
-  // precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita_standard', LValNum) and (LValNum is TJSONNumber) then
     FQuantitaStandard := TJSONNumber(LValNum).AsDouble;
 end;

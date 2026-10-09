@@ -1,55 +1,20 @@
 unit uClientiToolProvider;
 
-(* ============================================================================
-  TClientiToolProvider - tool MCP get_cliente: restituisce l'anagrafica di UN
-  cliente (tabella clienti), cercato per id, per partita IVA oppure per
-  ragione sociale.
-
-  -- Un solo tool con tre parametri opzionali --------------------------------
-  Principio "tool generico e parametrico" del documento di progetto: non tre
-  tool (get_cliente_by_id, ..._by_partita_iva, ..._by_ragione_sociale) ma uno
-  solo, con tre chiavi di ricerca facoltative di cui ne serve almeno una.
-  Meno tool nel catalogo = meno possibilita' che un modello piccolo scelga
-  quello sbagliato.
-
-  Se arrivano piu' chiavi insieme vince la piu' precisa:
-      id  >  partita IVA  >  ragione sociale
-  (id e partita IVA sono univoche - PRIMARY KEY e UNIQUE nel DDL - mentre la
-  ragione sociale puo' essere parziale e corrispondere a piu' clienti).
-
-  -- Perche' e' un provider RTTI (come TVenditeToolProvider) -----------------
-  I tre parametri sono stringhe semplici: bastano [MCPTool]/[MCPParam] e lo
-  schema JSON lo genera la libreria. I provider "dinamici" (ricette, file...)
-  servono solo quando un parametro e' un array o un oggetto. Come per
-  get_list_vendite, i nomi dei parametri visti dal modello sono quelli Pascal
-  (AClienteId, ARagioneSocialeCliente, APartitaIva): i primi due sono
-  volutamente GLI STESSI di get_list_vendite, cosi' il modello ritrova lo
-  stesso nome per lo stesso concetto.
-
-  -- Nessuna logica di dominio qui -------------------------------------------
-  Il provider e' solo un adattatore fra il protocollo MCP e codice che esiste
-  gia':
-    - TCliente.GetByID / GetByPartitaIva   (models/uModelCliente.pas)
-    - TServizioVendite.RisolviCliente      (services/uServiziVendite.pas):
-      match esatto sulla ragione sociale, poi parziale - la stessa risoluzione
-      usata da get_list_vendite, quindi lo stesso nome da' lo stesso cliente
-      in entrambi i tool.
-
-  -- Le tre risposte possibili -----------------------------------------------
-    1. {"esito":"ok","cliente":{...}}       trovato un solo cliente;
-    2. {"esito":"richiede_disambiguazione","problemi":[...]}
-                                            ragione sociale ambigua o non
-                                            trovata: stessa forma di
-                                            get_list_vendite (campo
-                                            "ragione_sociale_cliente"), quindi
-                                            l'esecutore del piano e i pulsanti
-                                            di scelta in chat.js funzionano
-                                            senza modifiche;
-    3. errore del tool (TMCPToolResult.Error)
-                                            nessuna chiave di ricerca, partita
-                                            IVA malformata, id o partita IVA
-                                            inesistenti.
-  ============================================================================ *)
+// Tool MCP get_cliente: anagrafica di un cliente, cercato per id, partita IVA o ragione
+// sociale.
+// Un solo tool con tre chiavi facoltative (ne serve almeno una): meno tool nel catalogo,
+// meno errori di scelta del modello. Se ne arrivano piu' vince la piu' precisa: id >
+// partita IVA > ragione sociale (le prime due sono univoche, la terza puo' essere
+// parziale).
+// Provider RTTI: i parametri sono stringhe semplici, lo schema lo genera la libreria.
+// AClienteId e ARagioneSocialeCliente hanno lo stesso nome di get_list_vendite, cosi' il
+// modello ritrova lo stesso nome per lo stesso concetto.
+// Nessuna logica di dominio: usa TCliente.GetByID/GetByPartitaIva e
+// TServizioVendite.RisolviCliente (la stessa risoluzione di get_list_vendite).
+// Risposte: "ok" con il cliente; "richiede_disambiguazione" se la ragione sociale e'
+// ambigua o non trovata (stessa forma di get_list_vendite, cosi' i pulsanti di scelta in
+// chat funzionano); errore del tool se manca la chiave, la partita IVA e' malformata o
+// id/partita IVA non esistono.
 
 interface
 
@@ -81,24 +46,19 @@ type
       [MCPParam('Partita IVA del cliente: 11 cifre, senza spazi.', TMCPParamPresence.Optional)]
         const APartitaIva: string
     ): TMCPToolResult;
-    // Contratto del tool per il pianificatore (vedi agente_ai/tool/
-    // uContrattiTool.pas e la sezione in fondo a questa unit).
+    // Contratto del tool per il pianificatore (vedi uContrattiTool.pas e il fondo di questa
+    // unit).
     class function ContrattiTool: TArray<TContrattoTool>;
   end;
 
 implementation
 
 const
-  // Partita IVA italiana: 11 cifre (vedi COMMENT ON COLUMN clienti.partita_iva
-  // e VARCHAR(11) nel DDL).
+  // Partita IVA italiana: 11 cifre.
   LUNGHEZZA_PARTITA_IVA = 11;
 
-{ Funzioni di supporto, private all'unit }
-
-// Toglie quello che un utente (o il modello) aggiunge spesso a una partita
-// IVA senza cambiarne il significato: spazi e il prefisso paese "IT".
-// "IT 012 345 678 90" -> "01234567890". Non controlla che il risultato sia
-// valido: per quello c'e' SembraPartitaIva.
+// Toglie spazi e prefisso "IT" ("IT 012 345 678 90" -> "01234567890"). Non valida: per
+// quello c'e' SembraPartitaIva.
 function NormalizzaPartitaIva(const AValore: string): string;
 begin
   Result := UpperCase(StringReplace(Trim(AValore), ' ', '', [rfReplaceAll]));
@@ -106,9 +66,7 @@ begin
     Result := Result.Substring(2);
 end;
 
-// True se AValore e' fatto di esattamente 11 cifre. Controllo di FORMA, non
-// della cifra di controllo: qui serve solo a distinguere una partita IVA da
-// un id o da una ragione sociale.
+// True se sono esattamente 11 cifre. Controllo di forma, non della cifra di controllo.
 function SembraPartitaIva(const AValore: string): Boolean;
 var
   LCarattere: Char;
@@ -121,10 +79,8 @@ begin
   Result := True;
 end;
 
-// Risposta "ok": l'anagrafica completa, cosi' come la produce gia'
-// TCliente.ToJSONObject per le API REST del gestionale (stessi nomi di campo
-// del database). Se ToJSONObject cambia, va aggiornato SCHEMA_OUTPUT_GET_CLIENTE
-// in fondo a questa unit.
+// Risposta "ok": anagrafica come la produce TCliente.ToJSONObject. Se questo cambia,
+// aggiornare SCHEMA_OUTPUT_GET_CLIENTE in fondo.
 function CostruisciRispostaOk(ACliente: TCliente): string;
 var
   LRoot: TJSONObject;
@@ -139,10 +95,8 @@ begin
   end;
 end;
 
-// Risposta "richiede_disambiguazione" per una ragione sociale ambigua o non
-// trovata. Stessa forma costruita da uVenditeToolProvider (un solo problema,
-// campo "ragione_sociale_cliente", candidati con id/ragione_sociale/
-// partita_iva). ARisoluzione resta del chiamante.
+// Risposta "richiede_disambiguazione": stessa forma di uVenditeToolProvider (un problema,
+// campo "ragione_sociale_cliente", candidati con id/ragione_sociale/partita_iva).
 function CostruisciRispostaDisambiguazione(ARisoluzione: TRisoluzioneCliente): string;
 var
   LRoot, LProblema, LCandidatoObj: TJSONObject;
@@ -181,8 +135,6 @@ begin
   end;
 end;
 
-{ TClientiToolProvider }
-
 function TClientiToolProvider.GetCliente(const AClienteId, ARagioneSocialeCliente,
   APartitaIva: string): TMCPToolResult;
 var
@@ -191,19 +143,13 @@ var
   LCliente: TCliente;
   LRisoluzione: TRisoluzioneCliente;
 begin
-  // Copie locali: i parametri sono const e qui sotto possono cambiare posto.
   LIdTxt := Trim(AClienteId);
   LNome := Trim(ARagioneSocialeCliente);
   LPartitaIva := NormalizzaPartitaIva(APartitaIva);
 
-  // TOLLERANZA sul parametro sbagliato. Con i modelli locali l'errore piu'
-  // frequente non e' il valore ma la CASELLA in cui viene messo (vedi
-  // NormalizzaIdOTesto in uVenditeToolProvider). Invece di rifiutare la
-  // chiamata, il valore viene spostato dove ha senso:
-  //  - 11 cifre in AClienteId o in ARagioneSocialeCliente sono una partita
-  //    IVA (un id di 11 cifre non puo' esistere: la colonna e' SERIAL, al
-  //    massimo 10 cifre);
-  //  - un "id" che non e' un intero positivo e' una ragione sociale.
+  // Tolleranza sul parametro sbagliato: i modelli locali sbagliano la casella piu' del
+  // valore. Quindi: 11 cifre in id o ragione sociale sono una partita IVA (un id SERIAL non
+  // arriva a 11 cifre); un "id" non intero positivo e' una ragione sociale.
   if (LPartitaIva = '') and SembraPartitaIva(NormalizzaPartitaIva(LIdTxt)) then
   begin
     LPartitaIva := NormalizzaPartitaIva(LIdTxt);
@@ -222,7 +168,7 @@ begin
     LId := 0;
   end;
 
-  // Ricerca, dalla chiave piu' precisa alla meno precisa.
+  // Dalla chiave piu' precisa alla meno precisa.
   if LId > 0 then
   begin
     LCliente := TCliente.GetByID(LId);
@@ -231,8 +177,8 @@ begin
   end
   else if LPartitaIva <> '' then
   begin
-    // Controllo di forma PRIMA della query: "partita IVA scritta male" e
-    // "partita IVA che non e' di nessun cliente" sono due risposte diverse.
+    // Controllo di forma prima della query: "partita IVA scritta male" e "partita IVA di
+    // nessun cliente" sono risposte diverse.
     if not SembraPartitaIva(LPartitaIva) then
       Exit(TMCPToolResult.Error(Format(
         'Partita IVA "%s" non valida: deve essere di %d cifre.',
@@ -245,11 +191,11 @@ begin
   begin
     LRisoluzione := TServizioVendite.RisolviCliente(LNome);
     try
-      // Piu' clienti o nessuno: decide l'utente, non il tool.
+      // Piu' clienti o nessuno: decide l'utente.
       if LRisoluzione.Esito <> erRisolto then
         Exit(TMCPToolResult.Text(CostruisciRispostaDisambiguazione(LRisoluzione)));
-      // RisolviCliente porta solo id, ragione sociale e partita IVA:
-      // l'anagrafica completa si rilegge per id.
+      // RisolviCliente porta solo id, ragione sociale e partita IVA: l'anagrafica completa
+      // si rilegge per id.
       LCliente := TCliente.GetByID(LRisoluzione.ClienteID);
     finally
       LRisoluzione.Free;
@@ -268,16 +214,10 @@ begin
   end;
 end;
 
-// ---------------------------------------------------------------------------
-// CONTRATTO DEL TOOL (vedi agente_ai/tool/uContrattiTool.pas). Lo schema di
-// output descrive la risposta "ok" costruita piu' sopra: "cliente" ha
-// esattamente i campi di TCliente.ToJSONObject (lo schema non ammette campi
-// in piu'). I campi facoltativi nel database (telefono, indirizzi) arrivano
-// come stringa vuota, mai null, quindi sono tutti "required".
-// "id" e' integer: un piano puo' passarlo a un parametro stringa come
-// AClienteId di get_list_vendite ("$1.cliente.id"), l'assegnazione
-// integer -> string e' ammessa dal validatore.
-// ---------------------------------------------------------------------------
+// Schema di output della risposta "ok" (contratto in uContrattiTool.pas): "cliente" ha
+// esattamente i campi di TCliente.ToJSONObject. I campi facoltativi arrivano come stringa
+// vuota, mai null, quindi sono tutti "required". "id" e' integer: un piano puo' passarlo ad
+// AClienteId di get_list_vendite ("$1.cliente.id").
 
 const
   SCHEMA_OUTPUT_GET_CLIENTE =
@@ -299,8 +239,7 @@ const
 
 class function TClientiToolProvider.ContrattiTool: TArray<TContrattoTool>;
 begin
-  // Lettura, nessuna conferma. Unico vincolo che lo schema del server non
-  // esprime: serve almeno una delle tre chiavi di ricerca.
+  // Lettura, nessuna conferma. Lo schema non esprime che serve almeno una delle tre chiavi.
   Result := TArray<TContrattoTool>.Create(
     ContrattoTool('get_cliente', etLettura, False,
       SCHEMA_OUTPUT_GET_CLIENTE,

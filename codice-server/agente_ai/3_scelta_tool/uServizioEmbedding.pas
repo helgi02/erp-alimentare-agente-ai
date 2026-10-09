@@ -1,37 +1,15 @@
 unit uServizioEmbedding;
 
-(* ============================================================================
-  TServizioEmbedding -- client verso l'endpoint /v1/embeddings di LM Studio
-  (API compatibile OpenAI), usato dalla fase 1 dell'orchestratore (retrieval
-  semantico dei tool: vedi agente_ai/3_scelta_tool/uIndiceEmbeddingTool.pas).
-
-  -- Cosa fa, e cosa NON fa --------------------------------------------------
-  Trasforma un testo in un vettore di numeri (un "embedding"): testi di
-  significato simile producono vettori vicini fra loro. Questa unit non sa
-  nulla di PostgreSQL/pgvector ne' di tool MCP - riceve stringhe, restituisce
-  vettori. Chi li confronta e li salva e' uIndiceEmbeddingTool.
-
-  -- Perche' un modello DIVERSO da quello di chat -----------------------------
-  Qwen (il modello di chat, vedi TServizioAgente.ChiamaLLM) e' addestrato per
-  generare testo, non per produrre imbedding di buona qualita'. Serve un
-  modello dedicato, piccolo (gira su CPU in millisecondi) e MULTILINGUE
-  (le domande arrivano in italiano): configurato a parte in
-  TConfig.EmbeddingModel, sezione [Embedding] dell'ini, chiave Model
-  (endpoint: chiave Endpoint, sempre sul server).
-  LM Studio puo' tenere entrambi i modelli caricati in memoria insieme:
-  sono due richieste HTTP verso due path diversi dello stesso server
-  (.../chat/completions vs .../embeddings), non due processi separati.
-
-  -- Perche' un metodo "batch" e non solo uno per singolo testo --------------
-  L'API /v1/embeddings, come tutte le API compatibili OpenAI, accetta "input"
-  come array di stringhe e risponde con un embedding per ciascuna, in
-  un'UNICA chiamata HTTP. TIndiceEmbeddingTool.Sincronizza deve calcolare
-  l'embedding di tutte le frasi nuove/cambiate ad ogni avvio: farlo con una
-  chiamata per frase moltiplicherebbe per N la latenza di rete per nessun
-  vantaggio (il costo di calcolo lato LM Studio e' comunque per frase).
-  Ottieni (singolare) resta utile per la query dell'utente in Cerca, dove
-  per costruzione c'e' un solo testo da trasformare.
-  ============================================================================ *)
+// Client dell'endpoint /v1/embeddings (API compatibile OpenAI), usato dal retrieval
+// semantico dei tool (uIndiceEmbeddingTool.pas). Trasforma un testo in un vettore: testi
+// simili danno vettori vicini. Non conosce PostgreSQL ne' i tool: riceve stringhe,
+// restituisce vettori.
+// Usa un modello diverso da quello di chat (piccolo, multilingue, adatto agli embedding),
+// configurato in [Embedding] dell'ini (Endpoint e Model). Il server di inferenza puo'
+// tenere in memoria entrambi i modelli: sono due path dello stesso server.
+// Il metodo batch esiste perche' l'API accetta un array di testi in una sola chiamata:
+// Sincronizza ne calcola molti a ogni avvio. Ottieni (singolare) serve per la domanda in
+// Cerca.
 
 interface
 
@@ -39,25 +17,18 @@ uses
   System.SysUtils;
 
 type
-  // Precisione Single, non Double: e' la stessa con cui la colonna
-  // "vector(384)" di pgvector memorizza i valori (float a precisione
-  // singola), quindi nessuna conversione di precisione fra quello che LM
-  // Studio restituisce e quello che finisce sul DB.
+  // Single (non Double): e' la precisione della colonna vector di pgvector, nessuna
+  // conversione.
   TEmbedding = TArray<Single>;
 
   TServizioEmbedding = class
   public
-    // Embedding di un singolo testo. Implementato sopra OttieniBatch (una
-    // chiamata con un solo elemento in "input"): un solo punto che parla
-    // con LM Studio, un solo posto dove aggiustare timeout/parsing/errori.
+    // Embedding di un singolo testo, sopra OttieniBatch: un solo punto da cui si parla con
+    // il server (timeout, parsing, errori).
     class function Ottieni(const ATesto: string): TEmbedding;
 
-    // Embedding di piu' testi in un'unica chiamata HTTP. L'ordine del
-    // risultato rispecchia ATesti indipendentemente dall'ordine in cui LM
-    // Studio elenca gli oggetti in "data": ciascuno porta un campo "index"
-    // (la posizione nell'array "input" originale) ed e' quello, non la
-    // posizione nella risposta, a decidere dove va il vettore nel
-    // risultato - vedi il commento nell'implementazione.
+    // Embedding di piu' testi in una sola chiamata. L'ordine del risultato segue ATesti
+    // grazie al campo "index" di ogni oggetto in "data", non alla posizione nella risposta.
     class function OttieniBatch(const ATesti: TArray<string>): TArray<TEmbedding>;
   end;
 
@@ -71,14 +42,9 @@ uses
   uConfig;
 
 const
-  // Un embedding e' un singolo forward pass su un modello piccolo (~100-300
-  // MB, pensato per girare su CPU in millisecondi), non una generazione
-  // token per token come la chat: se non risponde in pochi secondi il
-  // problema e' quasi certamente "il modello di embedding non e' caricato
-  // in LM Studio", non un motore lento al lavoro. Timeout piu' corto di
-  // quello usato per la chat (vedi TIMEOUT_LLM_MS in uServiziAgente) per lo
-  // stesso motivo per cui quel timeout e' piu' lungo: sono situazioni
-  // diverse, non lo stesso numero copiato altrove.
+  // Timeout piu' corto di quello della chat: un embedding e' un solo passaggio su un
+  // modello piccolo, quindi se non risponde in pochi secondi di solito il modello non e'
+  // caricato.
   TIMEOUT_EMBEDDING_MS = 15000;
 
 class function TServizioEmbedding.OttieniBatch(const ATesti: TArray<string>): TArray<TEmbedding>;
@@ -131,10 +97,8 @@ begin
 
         if LRisposta.StatusCode <> 200 then
         begin
-          // Stessa logica di ChiamaLLM (uServiziAgente.pas): il corpo
-          // dell'errore di LM Studio spiega quasi sempre il motivo vero
-          // (modello non caricato, richiesta malformata) meglio dello
-          // status code da solo.
+          // Come in ChiamaLLM: il corpo dell'errore spiega il motivo (modello non caricato,
+          // richiesta malformata) meglio del solo status code.
           LDettaglioErrore := Trim(LRisposta.ContentAsString(TEncoding.UTF8));
           if Length(LDettaglioErrore) > 500 then
             LDettaglioErrore := Copy(LDettaglioErrore, 1, 500) + '...';
@@ -169,11 +133,8 @@ begin
           begin
             LVoce := LDati.Items[i] as TJSONObject;
 
-            // "index" e' la posizione nell'array "input" ORIGINALE: la API
-            // OpenAI-compatibile non garantisce che "data" torni nello
-            // stesso ordine di "input" (in pratica con LM Studio succede,
-            // ma non c'e' motivo di fidarsene silenziosamente quando il
-            // campo che lo garantisce esiste apposta).
+            // "index" e' la posizione nell'array "input" originale: l'API non garantisce
+            // che "data" torni nello stesso ordine.
             LIndice := LVoce.GetValue<Integer>('index');
             LEmbeddingJSON := LVoce.GetValue('embedding') as TJSONArray;
 

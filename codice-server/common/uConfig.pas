@@ -23,63 +23,52 @@ type
     PoolSize: Integer;
   end;
 
-  // Server di posta in uscita, sezione [SMTP] dell'ini. Usato da
-  // TEmailServer (services/Service.EmailServer.pas). Host vuoto = invio
-  // email non configurato: il server parte lo stesso, e' l'invio a
-  // rispondere con un errore chiaro.
+  // Server di posta in uscita, sezione [SMTP] dell'ini, usato da TEmailServer. Host vuoto =
+  // invio non configurato: il server parte lo stesso e l'invio risponde con un errore
+  // chiaro.
   TConfigSMTP = record
     Host: string;
-    // 465 = TLS implicito; 587/25 = STARTTLS (vedi TEmailServer).
+    // 465 = TLS implicito; 587/25 = STARTTLS.
     Port: Integer;
     Username: string;
     Password: string;
     // Mittente mostrato al destinatario.
     FromName: string;
     FromAddress: string;
-    // Protezioni per prove e dimostrazioni (i clienti dei dati di test hanno
-    // indirizzi verosimili, che non devono ricevere nulla):
-    //   Simula = True      nessuna connessione al server SMTP: l'email
-    //                      viene solo scritta in logs\email_simulate.jsonl
-    //                      e l'invio risulta riuscito;
-    //   ReindirizzaA <> '' l'email parte DAVVERO, ma verso questo unico
-    //                      indirizzo; il destinatario vero finisce
-    //                      nell'oggetto ("[per: ...]").
-    // Simula ha la precedenza.
+    // Protezioni per prove e dimostrazioni (gli indirizzi dei dati di test sono verosimili
+    // e non devono ricevere nulla). Simula = True: nessuna connessione SMTP, l'email e'
+    // scritta in logs\email_simulate.jsonl e l'invio risulta riuscito. ReindirizzaA <> '':
+    // l'email parte davvero ma verso quell'unico indirizzo, con il destinatario vero
+    // nell'oggetto ("[per: ...]"). Simula ha la precedenza.
     Simula: Boolean;
     ReindirizzaA: string;
   end;
 
-  // Configurazione del modello di CHAT (l'agente), sezione [LLM] dell'ini.
-  // Record e non campi sparsi: si legge e si scrive tutta insieme sotto lock
-  // (vedi TConfig.Chat / TConfig.SalvaChat), cosi' un passo del turno non
-  // puo' mai vedere mezzo aggiornamento (es. endpoint nuovo con il nome del
-  // modello vecchio).
+  // Configurazione del modello di chat, sezione [LLM]. E' un record letto e scritto tutto
+  // insieme sotto lock, cosi' un passo del turno non vede mezzo aggiornamento (endpoint
+  // nuovo con modello vecchio).
   TConfigChat = record
     // URL di base di un'API compatibile OpenAI (es. http://localhost:1234/v1).
     Endpoint: string;
-    // Id del modello come compare in <Endpoint>/models; vuoto = modello
-    // caricato (LM Studio accetta 'local-model').
+    // Id del modello come in <Endpoint>/models; vuoto = modello caricato (LM Studio accetta
+    // 'local-model').
     Modello: string;
-    // Temperatura opzionale: HaTemperatura = False -> non la si invia e vale
-    // il default del motore.
+    // Temperatura opzionale: se HaTemperatura = False non si invia e vale il default del
+    // motore.
     HaTemperatura: Boolean;
     Temperatura: Double;
-    // 0 = nessun tetto esplicito ai token generati. Un tetto e' il
-    // paracadute contro i loop di ripetizione: un modello locale piccolo
-    // puo' ripetere all'infinito lo stesso paragrafo e far scadere il
-    // timeout (errore WinHTTP 12002) invece di fermarsi da solo.
+    // 0 = nessun tetto ai token generati. Un tetto protegge dai loop di ripetizione, che
+    // con un modello piccolo fanno scadere il timeout (WinHTTP 12002).
     MaxToken: Integer;
-    // Presence penalty opzionale (API OpenAI, -2..2): penalizza i token
-    // gia' comparsi nel testo e rompe i loop di ripetizione.
-    // HaPresencePenalty = False -> non la si invia e vale il default.
+    // Presence penalty opzionale (-2..2): penalizza i token gia' comparsi e rompe i loop di
+    // ripetizione. Se HaPresencePenalty = False vale il default.
     HaPresencePenalty: Boolean;
     PresencePenalty: Double;
-    // Modalita' "thinking" dei modelli che la prevedono (es. Qwen3.5). False
-    // = disattivata: per un flusso guidato da tool il ragionamento lungo non
-    // serve e sui modelli piccoli puo' finire nel testo della risposta in
-    // un ciclo senza fine.
+    // Modalita' "thinking" (es. Qwen3.5). False = disattivata: per un flusso a tool non
+    // serve e sui modelli piccoli puo' finire nel testo della risposta in un ciclo senza
+    // fine.
     Pensiero: Boolean;
-    // Attesa massima di UNA risposta del modello.
+    // Attesa massima di una risposta del modello.
     TimeoutMs: Integer;
   end;
 
@@ -87,104 +76,68 @@ type
 
   Private
 
-    // Unica istanza: creata una volta in TFrmMain.FormCreate (che resta
-    // proprietario del ciclo di vita, la libera in FormDestroy), ma
-    // esposta qui perche' uWebModule e i tool provider (porta HTTP per
-    // costruire l'URL /mcp, endpoint/modello LLM per il futuro agente)
-    // ne hanno bisogno e non hanno altrimenti modo di raggiungere il
-    // campo privato oConfig di TFrmMain.
+    // Unica istanza, creata in TFrmMain.FormCreate (che la libera in FormDestroy) ed
+    // esposta qui perche' uWebModule e i tool provider non possono raggiungere il campo
+    // privato oConfig.
     class var FInstance: TConfig;
 
-    // "var" esplicito: senza questo, tutti i campi che seguono
-    // resterebbero dentro il blocco "class var" appena aperto sopra
-    // (diventando anch'essi campi di classe, condivisi, invece che
-    // d'istanza) - causa dell'errore E2356 sulle property piu' sotto,
-    // che leggono questi campi aspettandosi campi d'istanza normali.
+    // "var" esplicito: senza, i campi seguenti resterebbero nel blocco "class var"
+    // (condivisi invece che d'istanza), causa dell'errore E2356 sulle property sotto.
     var
       FIniFileConfig: TIniFile;
     FDatabaseConfig: TDatabaseConfig;
     FHttpPort: Integer;
-    // Servizio di EMBEDDING (sezione [Embedding] dell'ini: Endpoint, Model).
-    // Serve a TServizioEmbedding per /v1/embeddings (retrieval semantico
-    // dei tool, vedi uIndiceEmbeddingTool.pas). E' SEPARATO dal modello di
-    // chat: gira sempre dove gira il server (localhost o rete interna),
-    // perche' l'indice in pgvector e' legato a questo modello e ogni
-    // ricerca lo interroga; il modello di chat ([LLM]) invece puo' stare
-    // altrove. I vettori delle domande devono venire dallo STESSO modello
-    // che ha costruito l'indice.
+    // Servizio di embedding, sezione [Embedding] (Endpoint, Model), per /v1/embeddings
+    // (retrieval dei tool, uIndiceEmbeddingTool). E' separato dal modello di chat, che puo'
+    // stare altrove: l'indice pgvector e' legato a questo modello, quindi i vettori delle
+    // domande devono venire dallo stesso.
     FEmbeddingEndpoint: string;
     FEmbeddingModel: string;
-    // Modello di CHAT (l'agente): UNA sola configurazione, letta da
-    // [LLM] ChatEndpoint/ChatModel/Temperatura/MaxToken/TimeoutMs.
-    //
-    // E' il server a chiamare il modello: il frontend non sa quale sia ne'
-    // dove giri. Puo' pero' MODIFICARE questa configurazione dal pannello
-    // impostazioni della chat (GET/PUT /api/ai/configurazione-llm): il
-    // server la valida, la scrive nell'ini (cosi' sopravvive al riavvio) e
-    // la applica subito, dal passo successivo.
-    //
-    // Letta e scritta da piu' thread (una richiesta HTTP per thread), quindi
-    // protetta da FLockChat: in Delphi assegnare una stringa mentre un altro
-    // thread la legge puo' corrompere il conteggio dei riferimenti.
+    // Modello di chat: una sola configurazione, da [LLM]
+    // ChatEndpoint/ChatModel/Temperatura/MaxToken/TimeoutMs. Il frontend non sa quale sia:
+    // puo' pero' modificarla dal pannello impostazioni (GET/PUT
+    // /api/ai/configurazione-llm); il server la valida, la scrive nell'ini e la applica dal
+    // passo successivo. E' letta e scritta da piu' thread, quindi protetta da FLockChat
+    // (assegnare una stringa mentre un altro thread la legge puo' corrompere il conteggio
+    // dei riferimenti).
     FChat: TConfigChat;
     FLockChat: TCriticalSection;
-    // --- API cloud per i test di confronto (vedi EndpointAmmesso) ---
-    // Lette UNA volta all'avvio e poi solo consultate: si cambiano
-    // nell'ini e riavviando il server, MAI dal pannello della chat (che non
-    // richiede autenticazione). "class var" perche' le usano funzioni di
-    // classe (EndpointAmmesso, ChiaveApiCloud) chiamate anche senza istanza.
-    //   [LLM] ConsentiCloud=1          interruttore generale (default 0)
-    //   [LLM] HostCloud=api.openai.com l'UNICO host pubblico ammesso
-    //   [LLM] ChiaveApi=sk-...         chiave; ha la precedenza la variabile
-    //                                  d'ambiente OPENAI_API_KEY
+    // API cloud per i test di confronto (vedi EndpointAmmesso). Lette una volta all'avvio:
+    // si cambiano nell'ini e riavviando, mai dal pannello della chat (senza
+    // autenticazione). "class var" perche' le usano funzioni di classe. [LLM]
+    // ConsentiCloud=1 interruttore (default 0); HostCloud=api.openai.com unico host
+    // pubblico ammesso; ChiaveApi=sk-... (ha la precedenza OPENAI_API_KEY).
     class var FConsentiCloud: Boolean;
     class var FHostCloud: string;
     class var FChiaveApiIni: string;
-    // Chiave per un motore LOCALE o di rete interna che richiede
-    // l'autenticazione (es. Unsloth Studio): [LLM] ChiaveApiLocale. Tenuta
-    // separata da ChiaveApi, cosi' la chiave OpenAI non finisce mai a un
-    // motore locale e quella locale non finisce mai al cloud. Vuota =
-    // nessuna intestazione Authorization (LM Studio, Ollama, llama.cpp).
+    // Chiave per un motore locale o di rete interna che richiede autenticazione (es.
+    // Unsloth Studio): [LLM] ChiaveApiLocale. Separata da ChiaveApi, cosi' la chiave OpenAI
+    // non va a un motore locale e viceversa. Vuota = nessuna intestazione Authorization.
     class var FChiaveApiLocaleIni: string;
     var
-    // --- Orchestratore (fase 1: selezione dei tool) e modalita' di test ---
-    // Strategia di selezione di default (vedi TModalitaSelezione in
-    // uServiziAgente.pas): 'tutti', 'topk_tool', 'provider_rango',
-    // 'provider_margine', 'provider_completo' (la versione in produzione).
+    // Orchestratore (selezione dei tool) e modalita' di test. Strategia di default
+    // (TModalitaSelezione): 'tutti', 'topk_tool', 'provider_rango', 'provider_margine',
+    // 'provider_completo' (produzione).
     FSelezioneModalita: string;
-    // Quanti tool singoli tiene la modalita' 'topk_tool' (baseline di
-    // confronto per la relazione: la selezione per provider e' nata proprio
-    // perche' il top-K di tool singoli spezzava le catene di tool).
+    // Tool tenuti da 'topk_tool' (baseline di confronto per la relazione: la selezione per
+    // provider nasce perche' il top-K spezzava le catene di tool).
     FSelezioneTopKTool: Integer;
-    // Motore dell'orchestratore: 'ciclo' (quello di sempre: il modello chiama
-    // i tool uno dopo l'altro) oppure 'pianificatore' (piano + esecuzione dal
-    // codice, vedi agente_ai/1_turno/uTurnoPianificato.pas). Default 'ciclo'.
+    // Motore dell'orchestratore: 'ciclo' (il modello chiama i tool uno dopo l'altro) o
+    // 'pianificatore' (piano ed esecuzione dal codice, uTurnoPianificato). Default 'ciclo'.
     FMotoreOrchestratore: string;
-    // Se True, il corpo di POST /api/ai/turni puo' sovrascrivere
-    // modalita' di selezione e nome del modello LM Studio (campi opzionali
-    // "modalita_selezione" e "modello"). Serve SOLO alla batteria di test:
-    // la pagina HTML non manda mai questi campi. Di default e' spento, cosi'
-    // in uso normale nessun client puo' cambiare il comportamento
-    // dell'orchestratore.
+    // Se True, il corpo di POST /api/ai/turni puo' sovrascrivere "modalita_selezione" e
+    // "modello". Serve solo alla batteria di test; di default spento.
     FAbilitaOverrideTest: Boolean;
-    // Cartella dove TFilesToolsProvider (generate_csv/generate_pdf) scrive i
-    // file generati su richiesta del modello, servita staticamente da
-    // TMVCStaticFilesMiddleware su /export (vedi uWebModule.pas). Sempre un
-    // percorso ASSOLUTO dopo Load: se in ini e' relativo, viene risolto
-    // rispetto alla cartella dell'eseguibile - stesso criterio gia' usato
-    // per GetFullPathFileIni/getFullPathFileLog.
+    // Cartella dove TFilesToolsProvider scrive i file generati, servita su /export da
+    // TMVCStaticFilesMiddleware. Dopo Load e' sempre assoluta: se in ini e' relativa, si
+    // risolve rispetto all'eseguibile.
     FExportFolder: string;
-    // Base URL con cui comporre il link di download restituito nel
-    // tool_result (es. http://localhost:8080/export/xxx.csv). Di default
-    // dedotta da HttpPort assumendo client MCP e server sulla stessa
-    // macchina (vero per LM Studio locale, coerente con "nessun dato esce
-    // dall'infrastruttura locale") - sovrascrivibile in ini con
-    // [Server] PublicBaseUrl se in futuro client e server girassero su
-    // macchine diverse della stessa rete locale.
+    // Base URL del link di download restituito nel tool_result. Di default dedotta da
+    // HttpPort (client e server sulla stessa macchina); sovrascrivibile con [Server]
+    // PublicBaseUrl.
     FPublicBaseUrlOverride: string;
-    // Letta una volta in Load e poi mai modificata: si puo' leggere da piu'
-    // thread senza lock (a differenza di FChat, che il pannello impostazioni
-    // puo' riscrivere).
+    // Letta una volta in Load e mai modificata: leggibile da piu' thread senza lock (a
+    // differenza di FChat).
     FSMTP: TConfigSMTP;
 
     function GetFullPathFileIni: String;
@@ -196,11 +149,8 @@ type
     Constructor Create;
     Destructor Destroy; override;
 
-    // Solleva un'eccezione se richiamata prima che TFrmMain.FormCreate
-    // abbia creato la configurazione - stesso principio di guardia di
-    // TDB.GetInstance, qui pero' senza creazione lazy: TConfig legge un
-    // file e valida la sua presenza nel costruttore, quindi la creazione
-    // implicita "silenziosa" nasconderebbe un errore di avvio.
+    // Solleva un'eccezione se chiamata prima che FormCreate abbia creato la configurazione.
+    // Niente creazione lazy: nasconderebbe un errore di avvio.
     class function GetInstance: TConfig;
 
     property DatabaseConfig: TDatabaseConfig read FDatabaseConfig;
@@ -209,29 +159,24 @@ type
     property EmbeddingEndpoint: string read FEmbeddingEndpoint;
     property EmbeddingModel: string read FEmbeddingModel;
 
-    // Copia della configurazione del modello di chat (sotto lock). Chi la
-    // usa per una chiamata deve leggerla UNA volta e lavorare sulla copia.
+    // Copia della configurazione di chat (sotto lock): chi la usa la legge una volta e
+    // lavora sulla copia.
     function Chat: TConfigChat;
-    // Controlla una configurazione proposta dal client. False + motivo
-    // leggibile se non e' accettabile. Non modifica nulla.
+    // Controlla una configurazione proposta dal client: False + motivo leggibile se non
+    // accettabile. Non modifica nulla.
     class function ValidaChat(const AChat: TConfigChat; out AMotivo: string): Boolean;
-    // L'endpoint e' ammesso solo se punta a questa macchina o alla rete
-    // interna (vedi l'implementazione per il perche').
+    // Endpoint ammesso solo se punta a questa macchina o alla rete interna.
     class function EndpointAmmesso(const AEndpoint: string; out AMotivo: string): Boolean;
-    // True se l'endpoint punta a questa macchina o alla rete interna
-    // (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x). Chi lo usa per
-    // distinguere "locale" da "cloud" puo' ignorare AMotivo.
+    // True se l'endpoint e' locale o di rete interna (localhost, 127.x, 10.x, 172.16-31.x,
+    // 192.168.x). Chi distingue "locale" da "cloud" puo' ignorare AMotivo.
     class function EndpointLocale(const AEndpoint: string; out AMotivo: string): Boolean;
-    // Chiave da mandare come "Authorization: Bearer" all'API cloud: variabile
-    // d'ambiente OPENAI_API_KEY, altrimenti [LLM] ChiaveApi. Vuota = nessuna.
-    // Non va MAI scritta nei log ne' restituita al browser.
+    // Chiave "Authorization: Bearer" per l'API cloud: OPENAI_API_KEY, altrimenti [LLM]
+    // ChiaveApi. Vuota = nessuna. Mai nei log ne' al browser.
     class function ChiaveApiCloud: string;
-    // Chiave da mandare come "Authorization: Bearer" a un endpoint LOCALE
-    // (vedi EndpointLocale): [LLM] ChiaveApiLocale. Vuota = nessuna. Come
-    // l'altra, non va MAI scritta nei log ne' restituita al browser.
+    // Chiave "Authorization: Bearer" per un endpoint locale: [LLM] ChiaveApiLocale. Vuota =
+    // nessuna. Mai nei log ne' al browser.
     class function ChiaveApiLocale: string;
-    // Scrive la configurazione nell'ini e la rende attiva. Va chiamata solo
-    // dopo ValidaChat.
+    // Scrive la configurazione nell'ini e la attiva. Solo dopo ValidaChat.
     procedure SalvaChat(const AChat: TConfigChat);
     property SelezioneModalita: string read FSelezioneModalita;
     property SelezioneTopKTool: Integer read FSelezioneTopKTool;
@@ -310,7 +255,7 @@ var
   LPresenceIni: string;
 begin
 
-  // Configurazione di bootstrap: necessaria per stabilire la connessione al DB
+  // Bootstrap: serve per connettersi al DB.
   FDatabaseConfig.Server   := FIniFileConfig.ReadString('Database', 'Server', 'localhost');
   FDatabaseConfig.Port     := FIniFileConfig.ReadInteger('Database', 'Port', 5432);
   FDatabaseConfig.Database := FIniFileConfig.ReadString('Database', 'Database', '');
@@ -318,87 +263,76 @@ begin
   FDatabaseConfig.Password := FIniFileConfig.ReadString('Database', 'Password', '');
   FDatabaseConfig.PoolSize := FIniFileConfig.ReadInteger('Database', 'PoolSize', 10);
 
-  // Configurazione del server HTTP
+  // Server HTTP.
   FHttpPort := FIniFileConfig.ReadInteger('Server', 'HttpPort', 8080);
 
-  // Cartella di export (generate_csv/generate_pdf): default 'export' accanto
-  // all'eseguibile se la chiave non e' presente in ini. TPath.IsRelativePath
-  // permette comunque di configurare un percorso assoluto (es. un disco
-  // dedicato) senza cambiare codice.
+  // Cartella di export: default 'export' accanto all'eseguibile; un percorso assoluto e'
+  // comunque configurabile.
   LExportFolderIni := FIniFileConfig.ReadString('Server', 'ExportFolder', 'export');
   if TPath.IsRelativePath(LExportFolderIni) then
     FExportFolder := TPath.Combine(ExtractFilePath(Application.ExeName), LExportFolderIni)
   else
     FExportFolder := LExportFolderIni;
 
-  // TMVCStaticFilesMiddleware (uWebModule.pas) solleva un'eccezione in fase
-  // di creazione se il DocumentRoot non esiste: al primo avvio la cartella
-  // potrebbe mancare, quindi la creiamo qui, prima che il WebModule venga
-  // istanziato.
+  // TMVCStaticFilesMiddleware solleva un'eccezione se DocumentRoot non esiste: al primo
+  // avvio la cartella puo' mancare, quindi la si crea prima del WebModule.
   if not TDirectory.Exists(FExportFolder) then
     TDirectory.CreateDirectory(FExportFolder);
 
   FPublicBaseUrlOverride := FIniFileConfig.ReadString('Server', 'PublicBaseUrl', '');
 
-  // Servizio di embedding (vedi il commento su FEmbeddingEndpoint). Sezione
-  // [Embedding]; per compatibilita' con i vecchi ini, se manca si leggono
-  // ancora le chiavi [LLM] Endpoint / EmbeddingModel.
+  // Servizio di embedding. Se manca la sezione [Embedding] si leggono le chiavi dei vecchi
+  // ini ([LLM] Endpoint / EmbeddingModel).
   FEmbeddingEndpoint := FIniFileConfig.ReadString('Embedding', 'Endpoint',
     FIniFileConfig.ReadString('LLM', 'Endpoint', 'http://localhost:1234/v1'));
-  // Nessun default sensato per un modello di embedding (a differenza
-  // dell'endpoint, che e' quasi sempre localhost:1234): stringa vuota se la
-  // chiave manca, e TServizioEmbedding solleva un'eccezione chiara al
-  // primo utilizzo - non qui, per non far fallire l'avvio del server per
-  // una funzionalita' (il retrieval) che non e' ancora sul percorso
-  // critico della conversazione.
+  // Nessun default per il modello di embedding: stringa vuota, e TServizioEmbedding solleva
+  // un errore chiaro al primo uso. Non si fallisce all'avvio per una funzione non ancora
+  // sul percorso critico.
   FEmbeddingModel := FIniFileConfig.ReadString('Embedding', 'Model',
     FIniFileConfig.ReadString('LLM', 'EmbeddingModel', ''));
 
-  // Modello di chat (vedi il commento su FChat), sezione [LLM]. Indipendente
-  // dagli embedding: se ChatEndpoint manca vale il default di LM Studio
-  // locale, NON l'endpoint degli embedding (i due servizi possono stare su
-  // macchine diverse). Load gira nel costruttore, prima che partano le
-  // richieste HTTP: qui il lock non serve.
+  // Modello di chat, sezione [LLM], indipendente dagli embedding: se ChatEndpoint manca
+  // vale il default di LM Studio locale, non l'endpoint degli embedding (possono stare su
+  // macchine diverse). Load gira nel costruttore, prima delle richieste: il lock non serve.
   FChat.Endpoint := FIniFileConfig.ReadString('LLM', 'ChatEndpoint', 'http://localhost:1234/v1');
   FChat.Modello := FIniFileConfig.ReadString('LLM', 'ChatModel', '');
-  // Letta come STRINGA e convertita con il formato invariante (punto
-  // decimale): TIniFile.ReadFloat userebbe le impostazioni internazionali
-  // di Windows, e su un PC italiano "0.2" non verrebbe riconosciuto.
+  // Letta come stringa e convertita col formato invariante: ReadFloat userebbe le
+  // impostazioni di Windows e su un PC italiano "0.2" non verrebbe riconosciuto.
   LTemperaturaIni := Trim(FIniFileConfig.ReadString('LLM', 'Temperatura', ''));
   FChat.HaTemperatura := (LTemperaturaIni <> '') and
     TryStrToFloat(LTemperaturaIni, FChat.Temperatura, TFormatSettings.Invariant);
   FChat.MaxToken := FIniFileConfig.ReadInteger('LLM', 'MaxToken', 0);
-  // Stesso criterio della temperatura: stringa + formato invariante.
+  // Come la temperatura: stringa + formato invariante.
   LPresenceIni := Trim(FIniFileConfig.ReadString('LLM', 'PresencePenalty', ''));
   FChat.HaPresencePenalty := (LPresenceIni <> '') and
     TryStrToFloat(LPresenceIni, FChat.PresencePenalty, TFormatSettings.Invariant);
-  // Default False: il thinking si attiva solo esplicitamente (Pensiero=1).
+  // Default False: il thinking si attiva solo con Pensiero=1.
   FChat.Pensiero := FIniFileConfig.ReadBool('LLM', 'Pensiero', False);
   FChat.TimeoutMs := FIniFileConfig.ReadInteger('LLM', 'TimeoutMs', 180000);
 
-  // API cloud (vedi EndpointAmmesso): spenta se le chiavi mancano.
+  // API cloud: spenta se le chiavi mancano.
   FConsentiCloud := FIniFileConfig.ReadBool('LLM', 'ConsentiCloud', False);
   FHostCloud := LowerCase(Trim(FIniFileConfig.ReadString('LLM', 'HostCloud', 'api.openai.com')));
   FChiaveApiIni := Trim(FIniFileConfig.ReadString('LLM', 'ChiaveApi', ''));
-  // Chiave del motore locale (opzionale): letta all'avvio come le altre.
+  // Chiave del motore locale (opzionale).
   FChiaveApiLocaleIni := Trim(FIniFileConfig.ReadString('LLM', 'ChiaveApiLocale', ''));
 
-  // Orchestratore: default = comportamento attuale (provider_completo), quindi
-  // un ini senza queste chiavi funziona esattamente come prima.
+  // Default = comportamento attuale (provider_completo): un ini senza queste chiavi
+  // funziona come prima.
   FSelezioneModalita := FIniFileConfig.ReadString('Orchestratore', 'Modalita', 'provider_completo');
   FSelezioneTopKTool := FIniFileConfig.ReadInteger('Orchestratore', 'TopKTool', 3);
-  // Senza questa chiave il server usa il motore di sempre.
+  // Senza questa chiave si usa il motore di sempre.
   FMotoreOrchestratore := FIniFileConfig.ReadString('Orchestratore', 'Motore', 'ciclo');
   FAbilitaOverrideTest := FIniFileConfig.ReadBool('Test', 'AbilitaOverride', False);
 
-  // Posta in uscita (vedi TConfigSMTP). Nessun default per Host: senza la
-  // sezione [SMTP] l'invio email risulta "non configurato".
+  // Posta in uscita (TConfigSMTP). Nessun default per Host: senza [SMTP] l'invio risulta
+  // "non configurato".
   FSMTP.Host        := Trim(FIniFileConfig.ReadString('SMTP', 'Host', ''));
   FSMTP.Port        := FIniFileConfig.ReadInteger('SMTP', 'Port', 465);
   FSMTP.Username    := Trim(FIniFileConfig.ReadString('SMTP', 'Username', ''));
   FSMTP.Password    := FIniFileConfig.ReadString('SMTP', 'Password', '');
   FSMTP.FromName    := Trim(FIniFileConfig.ReadString('SMTP', 'FromName', ''));
-  // Mittente non indicato = l'utente con cui ci si autentica.
+  // Mittente non indicato = l'utente di autenticazione.
   FSMTP.FromAddress := Trim(FIniFileConfig.ReadString('SMTP', 'FromAddress', FSMTP.Username));
   FSMTP.Simula       := FIniFileConfig.ReadBool('SMTP', 'Simula', False);
   FSMTP.ReindirizzaA := Trim(FIniFileConfig.ReadString('SMTP', 'ReindirizzaA', ''));
@@ -424,18 +358,12 @@ begin
   end;
 end;
 
-// PERCHE' SOLO INDIRIZZI LOCALI
-// Principio del progetto: nessun dato aziendale esce dall'infrastruttura.
-// Il modello riceve le domande E i risultati dei tool (vendite, clienti,
-// ricette...), quindi un endpoint pubblico li manderebbe fuori. In piu', il
-// pannello impostazioni oggi non richiede autenticazione: senza questo
-// controllo chiunque apra il sito potrebbe far contattare al server un
-// indirizzo qualsiasi di Internet. Si ammettono quindi:
-//   - questa macchina: localhost, 127.x.x.x, ::1;
-//   - la rete interna (IPv4 privati): 10.x, 172.16-31.x, 192.168.x
-//     (es. un PC con GPU nello stesso ufficio o raggiunto via VPN).
-// Aprire ad altro (API cloud) e' uno sviluppo futuro, da legare a un utente
-// autenticato con il ruolo giusto.
+// Perche' solo indirizzi locali: nessun dato aziendale deve uscire dall'infrastruttura, e
+// il modello riceve domande e risultati dei tool. Il pannello impostazioni non ha
+// autenticazione: senza questo controllo chiunque aprisse il sito potrebbe far contattare
+// al server un indirizzo qualsiasi di Internet. Si ammettono localhost, 127.x.x.x, ::1 e
+// gli IPv4 privati (10.x, 172.16-31.x, 192.168.x), es. un PC con GPU nello stesso ufficio o
+// via VPN. Aprire ad altro e' uno sviluppo futuro, legato a un utente autenticato.
 class function TConfig.EndpointLocale(const AEndpoint: string; out AMotivo: string): Boolean;
 var
   LResto, LHost: string;
@@ -446,7 +374,7 @@ begin
   Result := False;
   AMotivo := '';
 
-  // Schema: solo http/https.
+  // Solo http/https.
   if AEndpoint.StartsWith('http://', True) then
     LResto := Copy(AEndpoint, 8, MaxInt)
   else if AEndpoint.StartsWith('https://', True) then
@@ -457,8 +385,8 @@ begin
     Exit;
   end;
 
-  // Host = cio' che precede il primo '/', senza la porta. Le credenziali
-  // nell'URL (utente@host) non sono ammesse: renderebbero ambiguo l'host.
+  // Host = prima del primo '/', senza porta. Credenziali nell'URL (utente@host) non
+  // ammesse: renderebbero ambiguo l'host.
   p := Pos('/', LResto);
   if p > 0 then
     LResto := Copy(LResto, 1, p - 1);
@@ -469,7 +397,7 @@ begin
   end;
   if LResto.StartsWith('[') then
   begin
-    // IPv6 tra parentesi quadre: si ammette solo il loopback [::1].
+    // IPv6 tra parentesi quadre: solo il loopback [::1].
     p := Pos(']', LResto);
     LHost := Copy(LResto, 2, p - 2);
   end
@@ -507,18 +435,13 @@ begin
     'i dati aziendali non devono uscire dall''infrastruttura.', [LHost]);
 end;
 
-// ECCEZIONE CONTROLLATA: API CLOUD PER I TEST DI CONFRONTO (04/10/2026)
-// Per confrontare il modello locale con uno in cloud (ChatGPT) si ammette
-// anche UN host pubblico, a tre condizioni tutte necessarie:
-//   1. [LLM] ConsentiCloud=1 nell'ini: scelta esplicita di chi amministra
-//      il server, perche' da quel momento domande e risultati dei tool
-//      (dati aziendali) vengono inviati al fornitore del modello;
-//   2. https e host identico a [LLM] HostCloud (default api.openai.com).
-//      Non "qualsiasi indirizzo pubblico": il pannello della chat non ha
-//      autenticazione, e chi lo apre potrebbe altrimenti far spedire la
-//      chiave API e i dati a un server suo;
-//   3. una chiave API disponibile (vedi ChiaveApiCloud).
-// Con ConsentiCloud=0 il comportamento e' quello di prima: solo locale.
+// Eccezione controllata: API cloud per i test di confronto (04/10/2026). Si ammette un solo
+// host pubblico, a tre condizioni: 1) [LLM] ConsentiCloud=1, scelta esplicita di chi
+// amministra perche' domande e risultati dei tool (dati aziendali) vanno al fornitore; 2)
+// https e host identico a [LLM] HostCloud (default api.openai.com), non un indirizzo
+// pubblico qualsiasi: il pannello non ha autenticazione e altrimenti chiave e dati
+// potrebbero andare a un server altrui; 3) una chiave API (ChiaveApiCloud). Con
+// ConsentiCloud=0 solo locale.
 class function TConfig.EndpointAmmesso(const AEndpoint: string; out AMotivo: string): Boolean;
 var
   LHost: string;
@@ -541,8 +464,8 @@ begin
     Exit;
   end;
 
-  // Host = fra "https://" e il primo "/", senza porta. La "@" e' rifiutata:
-  // in "https://api.openai.com:443@altro.host/" l'host vero e' altro.host.
+  // Host fra "https://" e il primo "/", senza porta. La "@" e' rifiutata: in
+  // "https://api.openai.com:443@altro.host/" l'host vero e' altro.host.
   LHost := Copy(AEndpoint, 9, MaxInt);
   p := Pos('/', LHost);
   if p > 0 then
@@ -576,8 +499,8 @@ end;
 
 class function TConfig.ChiaveApiCloud: string;
 begin
-  // La variabile d'ambiente ha la precedenza: cosi' la chiave puo' restare
-  // fuori dai file del progetto (e dai loro backup).
+  // La variabile d'ambiente ha la precedenza, cosi' la chiave puo' restare fuori dai file
+  // del progetto e dai loro backup.
   Result := Trim(GetEnvironmentVariable('OPENAI_API_KEY'));
   if Result = '' then
     Result := FChiaveApiIni;
@@ -585,8 +508,8 @@ end;
 
 class function TConfig.ChiaveApiLocale: string;
 begin
-  // Solo dall'ini: niente variabile d'ambiente, per non confonderla con
-  // OPENAI_API_KEY (che e' riservata al cloud).
+  // Solo da ini, senza variabile d'ambiente, per non confonderla con OPENAI_API_KEY
+  // (riservata al cloud).
   Result := FChiaveApiLocaleIni;
 end;
 
@@ -604,8 +527,8 @@ begin
   if not EndpointAmmesso(Trim(AChat.Endpoint), AMotivo) then
     Exit;
 
-  // Il nome del modello finisce nell'ini: niente a capo o caratteri di
-  // controllo, che romperebbero il file.
+  // Il nome del modello finisce nell'ini: niente a capo o caratteri di controllo,
+  // romperebbero il file.
   if Length(AChat.Modello) > 200 then
   begin
     AMotivo := 'nome del modello troppo lungo';
@@ -660,11 +583,9 @@ begin
 
   FLockChat.Enter;
   try
-    // PRIMA l'ini, POI la memoria: se la scrittura del file fallisce
-    // (permessi, disco) si solleva l'eccezione e la configurazione attiva
-    // resta quella di prima, coerente con il file. TIniFile scrive con le
-    // API di Windows, che aggiornano le chiavi in posizione e lasciano
-    // intatti i commenti del file.
+    // Prima l'ini, poi la memoria: se la scrittura fallisce si solleva l'eccezione e la
+    // configurazione attiva resta coerente col file. TIniFile aggiorna le chiavi in
+    // posizione e lascia intatti i commenti.
     FIniFileConfig.WriteString('LLM', 'ChatEndpoint', Trim(AChat.Endpoint));
     FIniFileConfig.WriteString('LLM', 'ChatModel', Trim(AChat.Modello));
     FIniFileConfig.WriteString('LLM', 'Temperatura', LTemperatura);

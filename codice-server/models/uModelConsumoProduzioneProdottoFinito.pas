@@ -11,18 +11,13 @@ uses
   DbU;
 
 type
-  // Traccia UN componente consumato per produrre un lotto di prodotto
-  // finito (tabella consumi_produzione_prodotti_finiti). Speculare a
-  // TConsumoProduzioneSemilavorato — stesso ruolo (mettere in pratica
-  // una riga di TRicettaProdottoFinitoRiga con lotti e quantita' reali),
-  // stesso pattern XOR (chk_componente_consumo_prodotto_finito) tra
-  // LottoMateriaPrimaID e LottoSemilavoratoID, sentinella 0 = NULL.
-  //
-  // E' il punto d'arrivo della risalita di filiera nello scenario di
-  // ritiro/richiamo quando il componente non conforme e' gia' arrivato
-  // al prodotto finito: da qui (LottoProdottoFinitoID) si passa a
-  // ordini_vendita_righe per sapere quali clienti hanno gia' ricevuto
-  // quel lotto.
+  // Un componente consumato per produrre un lotto di prodotto finito
+  // (consumi_produzione_prodotti_finiti). Speculare a TConsumoProduzioneSemilavorato:
+  // registra lotto e quantita' reali di una riga di ricetta, con la stessa regola XOR
+  // (chk_componente_consumo_prodotto_finito) fra LottoMateriaPrimaID e LottoSemilavoratoID;
+  // 0 = NULL.
+  // E' il punto d'arrivo della risalita di filiera nel richiamo: da LottoProdottoFinitoID
+  // si passa a ordini_vendita_righe per sapere quali clienti hanno ricevuto il lotto.
   TConsumoProduzioneProdottoFinito = class
   private
     FID: Integer;
@@ -46,12 +41,9 @@ type
     property QuantitaConsumata: Currency read FQuantitaConsumata write FQuantitaConsumata;
     property IsComponenteMateriaPrima: Boolean read GetIsComponenteMateriaPrima;
 
-    // Campo di audit: sola lettura, gestito dal database (default/trigger
-    // trg_consumi_produzione_prodotti_finiti_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
-    // Operazioni CRUD
     class function GetByID(AID: Integer): TConsumoProduzioneProdottoFinito;
     class function GetByLottoProdottoFinito(ALottoProdottoFinitoID: Integer): TObjectList<TConsumoProduzioneProdottoFinito>;
     class function GetByLottoMateriaPrima(ALottoMateriaPrimaID: Integer): TObjectList<TConsumoProduzioneProdottoFinito>;
@@ -60,8 +52,8 @@ type
 
     function Insert: Integer; overload;   // restituisce l'ID generato (connessione pooled propria)
 
-    // Overload pensato per TServizioGiacenza: vedi il commento gemello
-    // in TConsumoProduzioneSemilavorato.Insert(AConnection).
+    // Overload per TServizioGiacenza: vedi
+    // TConsumoProduzioneSemilavorato.Insert(AConnection).
     function Insert(AConnection: TFDConnection): Integer; overload;
 
     function Update: Boolean;
@@ -79,8 +71,6 @@ const
     'lotto_semilavorato_id, quantita_consumata, creato_il, aggiornato_il ' +
     'FROM consumi_produzione_prodotti_finiti ';
 
-{ TConsumoProduzioneProdottoFinito }
-
 constructor TConsumoProduzioneProdottoFinito.Create;
 begin
   inherited Create;
@@ -96,7 +86,7 @@ end;
 
 procedure TConsumoProduzioneProdottoFinito.EnsureComponenteValido;
 begin
-  // Replica lato Delphi il CHECK chk_componente_consumo_prodotto_finito.
+  // Replica il CHECK chk_componente_consumo_prodotto_finito.
   if (FLottoMateriaPrimaID <> 0) = (FLottoSemilavoratoID <> 0) then
     raise Exception.Create(
       'TConsumoProduzioneProdottoFinito: la riga deve avere ESATTAMENTE uno tra ' +
@@ -148,8 +138,7 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneProdottoFinito;
 begin
-  // Tutti i componenti consumati per produrre un dato lotto di prodotto
-  // finito: la "distinta base effettiva" di quel lotto specifico.
+  // Componenti consumati per un lotto: la distinta base effettiva.
   Result := TObjectList<TConsumoProduzioneProdottoFinito>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -174,9 +163,8 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneProdottoFinito;
 begin
-  // Query "a ritroso": dato un lotto di materia prima, quali lotti di
-  // prodotto finito lo hanno consumato DIRETTAMENTE (senza passare da un
-  // semilavorato intermedio).
+  // A ritroso: i lotti di prodotto finito che hanno consumato direttamente un lotto di
+  // materia prima.
   Result := TObjectList<TConsumoProduzioneProdottoFinito>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -201,8 +189,7 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneProdottoFinito;
 begin
-  // Query "a ritroso": dato un lotto di semilavorato, quali lotti di
-  // prodotto finito lo hanno consumato.
+  // A ritroso: i lotti di prodotto finito che hanno consumato un lotto di semilavorato.
   Result := TObjectList<TConsumoProduzioneProdottoFinito>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -223,9 +210,7 @@ end;
 
 class function TConsumoProduzioneProdottoFinito.Delete(AID: Integer): Boolean;
 begin
-  // Nessun'altra tabella referenzia consumi_produzione_prodotti_finiti
-  // come FK: nodo foglia nello schema. Va comunque usata con cautela:
-  // e' un dato di tracciabilita' di produzione gia' avvenuta.
+  // Nodo foglia: nessuna FK lo referenzia.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM consumi_produzione_prodotti_finiti WHERE id = :id', [AID]);
 end;
@@ -240,8 +225,7 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FLottoSemilavoratoID;
 
-  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
-  // valorizzati dal DEFAULT del database (now()).
+  // creato_il/aggiornato_il: DEFAULT del database.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO consumi_produzione_prodotti_finiti ' +
     '(lotto_prodotto_finito_id, lotto_materia_prima_id, lotto_semilavorato_id, quantita_consumata) ' +
@@ -268,9 +252,7 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FLottoSemilavoratoID;
 
-  // Stessa INSERT dell'overload senza parametri, ma su AConnection (gia'
-  // dentro una transazione aperta dal chiamante, tipicamente
-  // TServizioGiacenza): vedi il commento gemello in
+  // Come l'overload senza parametri, ma su AConnection (transazione del chiamante): vedi
   // TConsumoProduzioneSemilavorato.Insert(AConnection).
   LQuery := TFDQuery.Create(nil);
   try
@@ -305,9 +287,7 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoID = 0 then LSemilavoratoParam := Null else LSemilavoratoParam := FLottoSemilavoratoID;
 
-  // aggiornato_il NON viene impostato esplicitamente: il trigger
-  // trg_consumi_produzione_prodotti_finiti_aggiornato_il lo valorizza
-  // automaticamente.
+  // aggiornato_il lo imposta il trigger.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE consumi_produzione_prodotti_finiti SET lotto_prodotto_finito_id = :lotto_prodotto_finito_id, ' +
     'lotto_materia_prima_id = :lotto_materia_prima_id, lotto_semilavorato_id = :lotto_semilavorato_id, ' +
@@ -358,8 +338,7 @@ var
   LValInt: Integer;
   LValNum: TJSONValue;
 begin
-  // id, creato_il, aggiornato_il NON vengono letti dal payload in
-  // ingresso: sono gestiti dal database, mai dal client
+  // Id e audit non si leggono dal payload: li gestisce il database.
   if AJSON.TryGetValue<Integer>('lotto_prodotto_finito_id', LValInt) then
     FLottoProdottoFinitoID := LValInt;
   if AJSON.TryGetValue<Integer>('lotto_materia_prima_id', LValInt) then
@@ -367,8 +346,7 @@ begin
   if AJSON.TryGetValue<Integer>('lotto_semilavorato_id', LValInt) then
     FLottoSemilavoratoID := LValInt;
 
-  // Campo numerico decimale: letto come TJSONNumber per preservarne la
-  // precisione (evitando conversioni intermedie a Double)
+  // Decimali letti come TJSONNumber, per non perdere precisione.
   if AJSON.TryGetValue<TJSONValue>('quantita_consumata', LValNum) and (LValNum is TJSONNumber) then
     FQuantitaConsumata := TJSONNumber(LValNum).AsDouble;
 end;

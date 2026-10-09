@@ -1,49 +1,21 @@
 ﻿unit uPianificatore;
 
-(* ============================================================================
-  PIANIFICATORE: PLANNER E COMPLETER - tappa 4 del porting.
-  Porting di contratti.py (Piano, Step, leggi_piano, leggi_completamento),
-  planner.py, completer.py e della composizione dei prompt di prompt.py
-  (cartella scripts/prototipo_pianificatore/pianificatore; specifica:
-  CONTRATTI.md, paragrafo 4).
-
-  -- Il piano ----------------------------------------------------------------
-  Il modello non esegue tool e non vede dati: trasforma la richiesta
-  dell'utente in un PIANO, cioe' un esito e un elenco di passi.
-
-    esito    "operativa"        servono dati o operazioni del gestionale
-             "conversazionale"  saluti, domande sull'assistente
-             "fuori_ambito"     argomenti estranei al gestionale
-    risposta testo per l'utente, solo se l'esito NON e' operativo
-    passi    solo se operativa: per ogni passo un'azione a parole e, quando
-             il modello sa gia' quale tool usare (uno dei "tool noti" della
-             conversazione), il tool e i suoi argomenti
-
-  Un passo con il tool e' CONCRETO; un passo con la sola azione e' ASTRATTO e
-  va completato.
-
-  -- Le due chiamate al modello ------------------------------------------------
-  1. PLANNER    riceve lo storico e la richiesta, restituisce il piano.
-  2. COMPLETER  solo se restano passi astratti: riceve la stessa conversazione
-                del Planner piu' i tool candidati trovati dal retrieval
-                (tappa 5) e per ogni passo astratto sceglie un tool e scrive
-                gli argomenti. E' una CONTINUAZIONE: i messaggi del Planner
-                sono il prefisso, cosi' il motore di inferenza riusa la cache.
-  Entrambe usano l'output vincolato (TClientLLM, "schema_risposta"): la
-  risposta e' un JSON della forma data. Qui si controlla la FORMA di cio'
-  che torna; tool esistenti, parametri e riferimenti sono compito del
-  validatore del piano (tappa 6).
-
-  -- Cosa NON fa questa unit ---------------------------------------------------
-  Non chiama il modello: prepara le richieste (RichiestaPiano,
-  RichiestaCompletamento) e legge le risposte (LeggiPiano,
-  ApplicaCompletamento). La chiamata la fa chi gestisce il turno a passi
-  (uServiziAgente, tappa 11), con TClientLLM.Completa. Cosi' ogni fase resta
-  un passo del protocollo con il client.
-
-  I testi dei prompt stanno in uPromptPianificatore.pas, generata dal
-  prototipo: qui c'e' solo il modo in cui i pezzi si compongono.
-  ============================================================================ *)
+// Pianificatore: Planner e Completer.
+// Il modello non esegue tool e non vede dati: trasforma la richiesta in un PIANO, cioe' un
+// esito e un elenco di passi.
+// esito: 'operativa' (servono dati o operazioni), 'conversazionale' (saluti, domande
+// sull'assistente), 'fuori_ambito' (argomenti estranei al gestionale).
+// risposta: testo per l'utente, solo se l'esito non e' operativa.
+// passi: solo se operativa; per ogni passo un'azione a parole e, se il modello sa gia'
+// quale tool usare (uno dei "tool noti"), tool e argomenti. Con il tool il passo e'
+// CONCRETO, senza e' ASTRATTO e va completato.
+// Due chiamate: PLANNER (storico + richiesta -> piano) e COMPLETER (solo se ci sono passi
+// astratti: stessa conversazione del Planner piu' i tool candidati del retrieval; sceglie
+// tool e argomenti). Il Completer e' una continuazione, cosi' il motore riusa la cache.
+// Entrambe usano l'output vincolato (schema_risposta).
+// Questa unit non chiama il modello: prepara le richieste e legge le risposte, controllando
+// solo la FORMA (tool, parametri e riferimenti li controlla il validatore). La chiamata la
+// fa uServiziAgente. I testi dei prompt stanno in uPromptPianificatore.pas.
 
 interface
 
@@ -58,8 +30,8 @@ const
   ESITO_FUORI_AMBITO = 'fuori_ambito';
 
 type
-  // Risposta di un modello che non rispetta la forma richiesta. Codici (gli
-  // stessi del prototipo): PIANO_NON_CONFORME, PASSO_INCOMPLETO.
+  // Risposta non conforme alla forma richiesta. Codici: PIANO_NON_CONFORME,
+  // PASSO_INCOMPLETO, PASSO_DOPPIO.
   EContrattoPiano = class(Exception)
   private
     FCodice: string;
@@ -98,7 +70,7 @@ type
     function ToJSON: TJSONObject;
   end;
 
-  // Tool candidati per un passo astratto (li produce il retrieval, tappa 5).
+  // Tool candidati per un passo astratto (li produce il retrieval).
   TCandidatiPasso = record
     Id: Integer;
     Azione: string;
@@ -111,28 +83,25 @@ type
     // (AAAA-MM-GG) ed elenco dei provider con la loro descrizione.
     class function PromptBase(const AOggi: string): string;
 
-    // Come un tool viene mostrato al modello: nome, descrizione, effetto,
-    // schema di input (quello del server + i vincoli del contratto) e schema
-    // di output. Del chiamante. Solleva un'eccezione se il tool non e' nel
-    // catalogo o non ha un contratto.
+    // Come un tool viene mostrato al modello: nome, descrizione, effetto, schema di input
+    // (server + vincoli del contratto) e di output. Solleva un'eccezione se il tool non e'
+    // nel catalogo o non ha un contratto.
     class function ToolPerLLM(const ANomeTool: string): TJSONObject;
 
     // True se il tool esiste nel catalogo e ha un contratto.
     class function ToolConosciuto(const ANomeTool: string): Boolean;
 
-    // Schema di input EFFETTIVO del tool (server + vincoli del contratto,
-    // compresa la chiave interna x_almeno_uno) e schema di output: sono
-    // quelli che usano il validatore e l'esecutore del piano. Del chiamante.
-    // Sollevano un'eccezione se il tool non e' conosciuto.
+    // Schema di input effettivo (server + vincoli del contratto, con la chiave interna
+    // x_almeno_uno) e di output, usati da validatore ed esecutore. Sollevano un'eccezione
+    // se il tool e' sconosciuto.
     class function SchemaInputTool(const ANomeTool: string): TJSONObject;
     class function SchemaOutputTool(const ANomeTool: string): TJSONObject;
 
-    // PLANNER. Richiesta per TClientLLM.Completa (del chiamante):
-    //   { "messages": [sistema, utente], "schema_risposta": {...} }
-    // AStorico: resa testuale dei turni precedenti (tappa 8).
-    // AToolNoti: tool gia' usati con successo nella conversazione; quelli non
-    //   conosciuti vengono ignorati. Solo per questi il modello puo' scrivere
-    //   direttamente tool e argomenti.
+    // PLANNER. Richiesta per TClientLLM.Completa: { messages: [sistema, utente],
+    // schema_risposta }.
+    // AStorico: turni precedenti in testo. AToolNoti: tool gia' usati con successo; solo
+    // con questi il modello puo' scrivere tool e argomenti direttamente (gli altri sono
+    // ignorati).
     class function RichiestaPiano(const AStorico, ADomanda, AOggi: string;
       const AToolNoti: TArray<string>): TJSONObject;
 
@@ -143,35 +112,29 @@ type
     // (PIANO_NON_CONFORME). Il risultato e' del chiamante.
     class function LeggiPiano(const ATesto: string): TPiano;
 
-    // COMPLETER. Richiesta per TClientLLM.Completa (del chiamante).
-    // AMessaggiPiano: i messaggi della chiamata del Planner (sistema, utente)
-    //   seguiti dal messaggio "assistant" con il piano COSI' COME il modello
-    //   lo ha scritto. Restano del chiamante (vengono copiati).
-    // ACandidati: una voce per ogni passo astratto, nell'ordine dei passi.
+    // COMPLETER. Richiesta per TClientLLM.Completa.
+    // AMessaggiPiano: messaggi del Planner piu' il messaggio 'assistant' con il piano
+    // com'e' stato scritto (copiati).
+    // ACandidati: una voce per passo astratto, in ordine.
     class function RichiestaCompletamento(AMessaggiPiano: TJSONArray;
       const ACandidati: TArray<TCandidatiPasso>): TJSONObject;
 
-    // Legge la risposta del Completer e scrive tool e argomenti nei passi
-    // astratti di APiano. La risposta deve coprire ESATTAMENTE i passi di
-    // ACandidati: solleva EContrattoPiano (PIANO_NON_CONFORME se tocca altri
-    // passi o e' malformata, PASSO_INCOMPLETO se ne salta uno, PASSO_DOPPIO
-    // se da' due voci per lo stesso passo). In caso di errore il piano non
-    // viene modificato.
+    // Legge la risposta del Completer e scrive tool e argomenti nei passi astratti. Deve
+    // coprire esattamente i passi di ACandidati: PIANO_NON_CONFORME se tocca altri passi o
+    // e' malformata, PASSO_INCOMPLETO se ne salta uno, PASSO_DOPPIO se ne duplica uno. In
+    // caso di errore il piano non cambia.
     class procedure ApplicaCompletamento(APiano: TPiano; const ATesto: string;
       const ACandidati: TArray<TCandidatiPasso>);
 
-    // Seconda (e ultima) richiesta al Completer dopo un PASSO_DOPPIO: la
-    // stessa richiesta di prima, piu' la risposta che il modello ha dato e
-    // un messaggio che gli dice cosa non va. ARichiesta resta del chiamante
-    // (viene copiata); il risultato e' del chiamante.
+    // Seconda e ultima richiesta al Completer dopo un PASSO_DOPPIO: la stessa richiesta,
+    // piu' la risposta data e un messaggio che spiega l'errore. ARichiesta e' copiata.
     class function RichiestaCorrezioneCompletamento(ARichiesta: TJSONObject;
       const ARispostaPrecedente, AProblema: string): TJSONObject;
   end;
 
-// Testo JSON scritto come lo scrive Python con json.dumps(..., ensure_ascii=
-// False): ", " fra gli elementi, ": " dopo le chiavi, lettere accentate non
-// trasformate in \uXXXX. Serve perche' gli schemi dei tool inseriti nei
-// prompt siano identici, carattere per carattere, a quelli del prototipo.
+// JSON scritto come json.dumps di Python con ensure_ascii=False (", " fra gli elementi, ":
+// " dopo le chiavi, accenti non trasformati in \uXXXX), per avere prompt identici carattere
+// per carattere a quelli di riferimento.
 function JSONComePython(AValore: TJSONValue): string;
 
 implementation
@@ -291,16 +254,12 @@ begin
   end;
 end;
 
-{ EContrattoPiano }
-
 constructor EContrattoPiano.Create(const ACodice, AMessaggio: string);
 begin
   inherited Create(ACodice + ': ' + AMessaggio);
   FCodice := ACodice;
   FMessaggio := AMessaggio;
 end;
-
-{ TPasso }
 
 destructor TPasso.Destroy;
 begin
@@ -335,8 +294,6 @@ begin
   Result.AddPair('dipendenze', LDipendenze);
 end;
 
-{ TPiano }
-
 constructor TPiano.Create;
 begin
   inherited;
@@ -365,8 +322,6 @@ begin
     LPassi.AddElement(LPasso.ToJSON);
   Result.AddPair('passi', LPassi);
 end;
-
-{ TPianificatore }
 
 class function TPianificatore.PromptBase(const AOggi: string): string;
 var
@@ -428,7 +383,6 @@ begin
   LRimossa := LSchemaInput.RemovePair('x_almeno_uno');
   LRimossa.Free;
 
-  // Stesso ordine dei campi di Tool.per_llm nel prototipo.
   Result := TJSONObject.Create;
   Result.AddPair('nome', ANomeTool);
   Result.AddPair('descrizione', TestoCampo(LFunzione, 'description'));
@@ -719,8 +673,8 @@ begin
     end;
     LTesto := LTesto + PROMPT_COMPLETAMENTO_SCHEMI;
 
-    // Gli schemi nell'ordine del CATALOGO (come nel prototipo), non in
-    // quello dei candidati: cosi' il testo non dipende dai punteggi.
+    // Schemi nell'ordine del catalogo e non dei candidati, cosi' il testo non dipende dai
+    // punteggi.
     for LDefinizione in TCatalogoTool.Definizioni do
     begin
       if not (LDefinizione is TJSONObject) then
@@ -794,26 +748,21 @@ begin
       if not LAstratto then
         raise EContrattoPiano.Create('PIANO_NON_CONFORME',
           Format('il completamento tocca il passo %s, che non e'' astratto', [JSONComePython(LId)]));
-      // CONTROLLO DI DIFESA (tappa 13) - differenza voluta dal prototipo,
-      // dove valeva l'ultima voce. Lo stesso passo scritto due volte e' una
-      // risposta AMBIGUA: ne' la prima ne' l'ultima e' "quella giusta" per
-      // regola (dipende dal modello), quindi il codice non sceglie. Si
-      // segnala PASSO_DOPPIO e chi gestisce il turno chiede al modello di
-      // correggersi una volta (vedi TTurnoPianificato.PassoCompletamento).
+      // Controllo di difesa: lo stesso passo scritto due volte e' ambiguo (ne' la prima ne'
+      // l'ultima voce e' quella giusta), quindi il codice non sceglie: segnala PASSO_DOPPIO
+      // e il turno chiede al modello di correggersi una volta
+      // (TTurnoPianificato.PassoCompletamento).
       if LScelte.ContainsKey(TJSONNumber(LId).AsInt) then
       begin
-        // Due voci IDENTICHE (stesso tool e stessi argomenti) non sono
-        // ambigue: non c'e' nessuna scelta da fare, quindi la seconda si
-        // ignora senza richiamare il modello. Il confronto e' sul testo
-        // JSON: se gli stessi argomenti sono scritti in ordine diverso le
-        // voci risultano diverse e si passa dalla correzione (scelta
-        // prudente: nel dubbio decide il modello, non il codice).
+        // Due voci identiche (stesso tool e stessi argomenti) non sono ambigue: la seconda
+        // si ignora. Il confronto e' sul testo JSON: argomenti in ordine diverso risultano
+        // diversi e passano dalla correzione.
         if (TestoCampo(LScelte[TJSONNumber(LId).AsInt], 'tool') = TestoCampo(TJSONObject(LVoce), 'tool')) and
            (LScelte[TJSONNumber(LId).AsInt].GetValue('argomenti').ToJSON =
             TJSONObject(LVoce).GetValue('argomenti').ToJSON) then
           Continue;
-        // Ogni passo ambiguo compare una volta sola nel messaggio, anche se
-        // il modello lo ha scritto tre o quattro volte.
+        // Ogni passo ambiguo compare una sola volta nel messaggio, anche se scritto piu'
+        // volte.
         if not (', ' + LDoppi + ',').Contains(', ' + IntToStr(TJSONNumber(LId).AsInt) + ',') then
         begin
           if LDoppi <> '' then
@@ -857,8 +806,8 @@ class function TPianificatore.RichiestaCorrezioneCompletamento(ARichiesta: TJSON
 var
   LMessaggi: TJSONValue;
 begin
-  // Stessi messaggi e stesso schema di risposta della prima richiesta: il
-  // modello vede cosa ha scritto e perche' non va bene.
+  // Stessi messaggi e schema della prima richiesta: il modello vede cosa ha scritto e
+  // perche' non va.
   Result := ARichiesta.Clone as TJSONObject;
   LMessaggi := Result.GetValue('messages');
   if LMessaggi is TJSONArray then

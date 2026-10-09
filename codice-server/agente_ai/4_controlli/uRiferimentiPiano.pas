@@ -1,52 +1,27 @@
 unit uRiferimentiPiano;
 
-(* ============================================================================
-  RIFERIMENTI FRA I PASSI DI UN PIANO - tappa 3 del porting del pianificatore.
-  Porting di scripts/prototipo_pianificatore/pianificatore/riferimenti.py
-  (specifica: CONTRATTI.md, paragrafo 5).
-
-  -- A cosa servono ----------------------------------------------------------
-  Il modello scrive tutto il piano PRIMA che un tool venga eseguito, quindi
-  non conosce i valori prodotti dai passi precedenti. Dove un passo ha
-  bisogno del risultato di un altro, negli argomenti scrive un riferimento:
-
-    $N.a.b.c        il campo c nell'output del passo N
-    $N.a[*].b.c     a e' un array: per ogni elemento, il suo campo b.c
-                    (il risultato e' un array, nello stesso ordine e con gli
-                    stessi doppioni)
-
-  Esempio: "lotti_prodotto_finito_id": "$1.lotti_prodotto_finito_id".
-  E' il codice, non il modello, a mettere il valore vero al posto del
-  riferimento: cosi' un id non puo' essere sbagliato o inventato lungo la
-  strada. Una stringa che comincia con "$$" e' un letterale che comincia con
-  "$" (es. "$$Dollaro srl" vale "$Dollaro srl").
-
-  -- Le due fasi -------------------------------------------------------------
-  PRIMA di eseguire (validatore del piano):
-    AnalizzaRiferimento  controlla la sintassi;
-    TipoStatico          ricava dall'output_schema del passo sorgente il tipo
-                         del valore che il riferimento produrra', e controlla
-                         che il percorso sia percorribile (campi dichiarati e
-                         OBBLIGATORI, array attraversati solo con [*]).
-  DURANTE l'esecuzione (esecutore del piano):
-    RisolviArgomenti     sostituisce ogni riferimento con il valore letto
-                         dall'output REALE del passo sorgente e ricontrolla
-                         gli argomenti contro lo schema di input.
-
-  -- Codici di errore (gli stessi del prototipo) ------------------------------
-    RIF_SINTASSI             riferimento scritto male
-    RIF_ARRAY_SENZA_STELLA   si attraversa un array senza [*]
-    RIF_CAMPO_INESISTENTE    campo non dichiarato nell'output_schema
-    RIF_NON_REFERENZIABILE   campo facoltativo (potrebbe non esserci)
-    RIF_STELLA_NON_ARRAY     [*] su un campo che non e' un array
-    RIF_NON_RISOLTO          a runtime: passo senza output o campo assente
-    RIF_VUOTO                a runtime: array vuoto verso un parametro che
-                             vuole almeno un elemento ("nessun lotto
-                             coinvolto" e' un esito normale, non un errore
-                             del piano: per questo ha un codice suo)
-    RIF_VALORE_NON_CONFORME  a runtime: gli argomenti risolti non rispettano
-                             lo schema di input
-  ============================================================================ *)
+// Riferimenti fra i passi di un piano.
+// Il modello scrive tutto il piano prima di eseguire i tool, quindi non conosce i valori
+// dei passi precedenti. Dove serve il risultato di un altro passo scrive un riferimento:
+// $N.a.b.c (campo c nell'output del passo N) oppure $N.a[*].b.c (a e' un array: per ogni
+// elemento il suo campo b.c; il risultato e' un array, stesso ordine e stessi doppioni).
+// Esempio: "lotti_prodotto_finito_id": "$1.lotti_prodotto_finito_id".
+// Il valore vero lo mette il codice, non il modello, cosi' un id non puo' essere sbagliato
+// o inventato. Una stringa che comincia con "$$" e' un letterale che comincia con "$"
+// ("$$Dollaro srl" vale "$Dollaro srl").
+// Prima di eseguire (validatore): AnalizzaRiferimento controlla la sintassi; TipoStatico
+// ricava dall'output_schema del passo sorgente il tipo del valore e controlla che il
+// percorso sia percorribile (campi dichiarati e obbligatori, array attraversati solo con
+// [*]).
+// Durante l'esecuzione: RisolviArgomenti sostituisce ogni riferimento con il valore letto
+// dall'output reale e ricontrolla gli argomenti contro lo schema di input.
+// Codici di errore: RIF_SINTASSI (scritto male), RIF_ARRAY_SENZA_STELLA (array attraversato
+// senza [*]), RIF_CAMPO_INESISTENTE (non dichiarato nell'output_schema),
+// RIF_NON_REFERENZIABILE (campo facoltativo), RIF_STELLA_NON_ARRAY ([*] su un non-array); a
+// runtime RIF_NON_RISOLTO (passo senza output o campo assente), RIF_VUOTO (array vuoto
+// verso un parametro che vuole almeno un elemento: "nessun lotto coinvolto" e' un esito
+// normale, non un errore del piano) e RIF_VALORE_NON_CONFORME (argomenti risolti contrari
+// allo schema di input).
 
 interface
 
@@ -87,17 +62,16 @@ function AnalizzaRiferimento(const ATesto: string): TRiferimento;
 // Schema del valore prodotto dal riferimento. Il risultato e' del chiamante.
 function TipoStatico(const ARiferimento: TRiferimento; AOutputSchema: TJSONObject): TJSONObject;
 
-// Valore del riferimento sull'output reale del passo sorgente. Nessuna
-// conversione. Il risultato e' una copia, del chiamante.
+// Valore del riferimento sull'output reale del passo sorgente, senza conversioni. Copia del
+// chiamante.
 function RisolviRiferimento(const ARiferimento: TRiferimento; AOutput: TJSONValue): TJSONValue;
 
 // Tutti i riferimenti presenti in un valore, a qualunque profondita'.
 function TrovaRiferimenti(AValore: TJSONValue): TArray<string>;
 
-// Argomenti con i riferimenti sostituiti dai valori veri, ricontrollati
-// contro AInputSchema. AOutputPassi contiene SOLO gli output dei passi
-// riusciti (numero del passo -> output; gli oggetti restano del chiamante).
-// Il risultato e' del chiamante.
+// Argomenti con i riferimenti sostituiti dai valori veri e ricontrollati contro
+// AInputSchema. AOutputPassi: solo gli output dei passi riusciti (numero passo -> output;
+// gli oggetti restano del chiamante). Il risultato e' del chiamante.
 function RisolviArgomenti(AArgomenti: TJSONObject;
   AOutputPassi: TDictionary<Integer, TJSONObject>; AInputSchema: TJSONObject): TJSONObject;
 
@@ -105,8 +79,6 @@ implementation
 
 uses
   uSchemaJSON;
-
-{ ERiferimento }
 
 constructor ERiferimento.Create(const ACodice, AMessaggio: string);
 begin
@@ -224,9 +196,8 @@ begin
     LCorrente := TJSONObject(TJSONObject(LProprieta).GetValue(LSegmento.Campo));
     if LSegmento.Stella then
     begin
-      // Un array senza "items" dichiarati non si puo' attraversare: non si
-      // saprebbe che tipo hanno gli elementi. (Nel prototipo questo caso non
-      // era gestito; con i contratti attuali non si presenta.)
+      // Un array senza "items" dichiarati non si puo' attraversare: non si saprebbe il tipo
+      // degli elementi.
       if (TestoCampo(LCorrente, 'type') <> 'array') or
          not (LCorrente.GetValue('items') is TJSONObject) then
         raise ERiferimento.Create('RIF_STELLA_NON_ARRAY',
@@ -371,10 +342,10 @@ begin
   Result := AValore.Clone as TJSONValue;
 end;
 
-// Unica conversione ammessa oltre integer -> number (contratto v1.2): un
-// riferimento a un intero verso un parametro stringa diventa la sua scrittura
-// decimale, anche elemento per elemento in un array. Serve per gli id: interi
-// negli output dei tool, stringhe nei loro parametri. Restituisce una copia.
+// Unica conversione ammessa oltre integer -> number: un riferimento a un intero verso un
+// parametro stringa diventa la sua scrittura decimale (anche per ogni elemento di un
+// array). Serve per gli id: interi negli output, stringhe nei parametri. Restituisce una
+// copia.
 function AStringa(AValore: TJSONValue; ASchema: TJSONObject): TJSONValue;
 var
   LArray: TJSONArray;
