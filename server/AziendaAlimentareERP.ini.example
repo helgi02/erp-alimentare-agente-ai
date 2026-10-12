@@ -1,6 +1,8 @@
 ; AziendaAlimentareERP.ini - ESEMPIO.
 ; Copiare questo file accanto a AziendaAlimentareERP.exe con il nome
 ; AziendaAlimentareERP.ini e compilare i valori. Il file vero NON va messo su git.
+; I valori di [LLM], [Embedding] e [Orchestratore] sono quelli usati nei test
+; (vedi README, "Modelli usati nei test"). Da compilare: le password.
 ; ChatModel: id del modello come compare in <ChatEndpoint>/models (vuoto = modello caricato).
 
 [Database]
@@ -16,10 +18,10 @@ HttpPort=8080
 
 [LLM]
 ChatEndpoint=http://localhost:1234/v1
-ChatModel=
+ChatModel=qwen/qwen3.5-9b
 Temperatura=0.2
-MaxToken=1024
-PresencePenalty=1
+MaxToken=2048
+PresencePenalty=1.0
 Pensiero=0
 TimeoutMs=180000
 ConsentiCloud=0
@@ -52,4 +54,6 @@ Simula=1
 ;ReindirizzaA=
 
 [Test]
+; Se 1, la batteria di test puo' forzare modello e modalita' di selezione dei tool
+; nella richiesta. Non influisce sull'uso normale dal frontend.
 AbilitaOverride=0
