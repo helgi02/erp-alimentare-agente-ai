@@ -740,7 +740,10 @@ App.Chat = {
             // anche cliccando il pulsante si vede che la vista e' stata aperta
             // dall'agente, anche se era gia' quella corrente.
             btn.addEventListener('click', () => {
-                Promise.resolve(App.Router.vaiA(risolta.url)).then(() => App.Router.evidenzia());
+                Promise.resolve(App.Router.vaiA(risolta.url)).then(() => {
+                    App.Router.evidenzia();
+                    App.Tabs.segnaDaAgente(App.Tabs.attiva, risultatoApriVista.motivo);
+                });
             });
             gruppo.appendChild(btn);
             div.appendChild(gruppo);
@@ -752,7 +755,13 @@ App.Chat = {
         // A vista disegnata, il segnale visivo che l'ha aperta l'agente
         // (App.Router.evidenzia): anche quando la vista era gia' quella
         // corrente, cosi' si capisce comunque a cosa si riferisce Pepper.
-        Promise.resolve(App.Router.vaiA(risolta.url)).then(() => App.Router.evidenzia());
+        // Oltre al bordo (che sfuma) la tab resta marcata con il peperoncino:
+        // vedi App.Tabs.segnaDaAgente. 'motivo' c'e' solo se la vista l'ha
+        // aperta una chiamata a apri_vista; per gli altri tool e' undefined.
+        Promise.resolve(App.Router.vaiA(risolta.url)).then(() => {
+            App.Router.evidenzia();
+            App.Tabs.segnaDaAgente(App.Tabs.attiva, risultatoApriVista.motivo);
+        });
 
         const nota = document.createElement('div');
         nota.className = 'chat-note';

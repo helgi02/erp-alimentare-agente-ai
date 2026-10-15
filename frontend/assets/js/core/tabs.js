@@ -96,7 +96,11 @@ App.Tabs = {
 
     salva() {
         try {
-            localStorage.setItem(this.CHIAVE_STORAGE, JSON.stringify({ elenco: this.elenco }));
+            // 'daAgente' (vedi segnaDaAgente) vale solo per la sessione in corso:
+            // non si salva, cosi' una tab aperta da Pepper giorni fa non resta
+            // marcata per sempre dopo un ricaricamento.
+            const elenco = this.elenco.map((t) => { const { daAgente, ...resto } = t; return resto; });
+            localStorage.setItem(this.CHIAVE_STORAGE, JSON.stringify({ elenco }));
         } catch (e) { /* non bloccante */ }
     },
 
@@ -148,6 +152,20 @@ App.Tabs = {
         tab.dettaglio = testo;
         this.salva();
         this.render();
+    },
+
+    // Segna una tab come "aperta dall'agente" (Pepper): la tab mostra un
+    // peperoncino prima del titolo e un tooltip con il motivo, se c'e'.
+    // E' il segnale che resta: il bordo di App.Router.evidenzia() sfuma in
+    // 1,6 s, questo no, e dice anche CHI ha aperto la vista.
+    // Il marcatore sta nell'oggetto della tab (non nel DOM) perche'
+    // render() ricostruisce tutta la barra a ogni navigazione.
+    // Chiamata da chat.js (aggiungiAperturaVista) a vista disegnata.
+    segnaDaAgente(chiave, motivo) {
+        const tab = this.elenco.find((t) => t.chiave === chiave);
+        if (!tab) return;
+        tab.daAgente = { motivo: motivo || '' };
+        this.render();   // niente salva(): vedi il commento in salva()
     },
 
     chiudi(chiave, evento) {
@@ -207,7 +225,9 @@ App.Tabs = {
             const attiva = t.chiave === this.attiva;
             return '' +
                 '<li>' +
-                '<a class="nav-link d-flex align-items-center gap-2 py-1 px-2' + (attiva ? ' active' : '') + '" href="' + App.Utils.esc(t.percorso) + '">' +
+                '<a class="nav-link d-flex align-items-center gap-2 py-1 px-2' + (attiva ? ' active' : '') + '" href="' + App.Utils.esc(t.percorso) + '"' +
+                (t.daAgente ? ' title="' + App.Utils.esc('Aperta da Pepper' + (t.daAgente.motivo ? ': ' + t.daAgente.motivo : '')) + '"' : '') + '>' +
+                (t.daAgente ? '<svg class="ico ico-pepper tab-da-agente" aria-label="Aperta da Pepper"><use href="#ico-pepper"></use></svg>' : '') +
                 '<span class="text-truncate" style="max-width:11rem">' + this.etichetta(t) + '</span>' +
                 '<button type="button" class="btn-close" style="font-size:.55rem" data-chiudi-tab="' + App.Utils.esc(t.chiave) + '" title="Chiudi scheda" aria-label="Chiudi scheda"></button>' +
                 '</a></li>';

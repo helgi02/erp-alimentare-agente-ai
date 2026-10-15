@@ -210,3 +210,11 @@
   padding: 1.25rem;
   background: var(--content-bg);
 }
+
+/* Marcatore "aperta da Pepper" sulla tab (App.Tabs.segnaDaAgente): il
+   peperoncino prende il colore primario e non cambia con la tab attiva. */
+.tab-strip .tab-da-agente {
+  width: .9rem;
+  height: .9rem;
+  color: var(--bs-primary, #3b82f6);
+}

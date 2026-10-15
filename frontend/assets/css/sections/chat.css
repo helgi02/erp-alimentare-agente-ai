@@ -1550,9 +1550,18 @@ body.resizing .sidebar {
   box-shadow: 0 1px 3px rgba(37, 99, 235, 0.12);
 }
 
-.btn-pepper-trigger .ico-sparkle {
-  fill: #3b82f6;
-  stroke: #3b82f6;
+/* Icona di Pepper (peperoncino, #ico-pepper nello sprite di index.html):
+   riempita con il colore del testo, quindi segue hover e tema. */
+.btn-pepper-trigger .ico-pepper {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+/* Nell'avatar tondo dell'intestazione: peperoncino bianco sul fondo colorato. */
+.pepper-avatar .ico-pepper {
+  width: 1rem;
+  height: 1rem;
+  color: #fff;
 }
 /* =====================================================================
    PANNELLO IMPOSTAZIONI DEL MODELLO (costruito da components/chat.js,
