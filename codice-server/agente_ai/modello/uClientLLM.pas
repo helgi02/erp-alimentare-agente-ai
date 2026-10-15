@@ -182,9 +182,17 @@ begin
     // che non lo conoscono ignorano il campo). Con Pensiero = True non si
     // manda nulla e vale il comportamento predefinito del modello.
     // Solo ai motori locali: l'API cloud rifiuta i campi che non conosce.
+    //
+    // In piu' si manda reasoning_effort = "none": LM Studio ignora
+    // chat_template_kwargs e, con "Enable Thinking" attivo, il ragionamento
+    // consuma i token e la risposta torna vuota. E' il campo standard
+    // OpenAI-compatibile per spegnere il ragionamento.
     if (not AChat.Pensiero) and not LCloud then
+    begin
       Result.AddPair('chat_template_kwargs',
         TJSONObject.Create.AddPair('enable_thinking', TJSONFalse.Create));
+      Result.AddPair('reasoning_effort', 'none');
+    end;
 
     // Clone: il corpo possiede i propri oggetti e li libera con se stesso,
     // mentre messaggi e tool restano della richiesta (e dello stato del

@@ -53,7 +53,7 @@ Il frontend è un'applicazione a pagina singola: un solo `index.html` contiene l
 
 Valori usati in `[LLM]`: `Temperatura=0.2`, `MaxToken=2048`, `PresencePenalty=1.0`, `Pensiero=0`; in `[Orchestratore]`: `Motore=pianificatore`.
 
-**Configurazione di LM Studio.** Per ogni modello con modalità di ragionamento (es. Qwen3.5), disattivare *Enable Thinking* nelle impostazioni del modello prima dell'uso. Con l'opzione attiva il modello consuma i token nel ragionamento e può restituire una risposta vuota: in quel caso l'assistente risponde che non riesce a costruire un piano valido.
+**Configurazione di LM Studio.** Per ogni modello con modalità di ragionamento (es. Qwen3.5) il server disattiva il ragionamento da solo, inviando `reasoning_effort: "none"` (LM Studio ignora invece il parametro `enable_thinking`). Se con un altro modello o un'altra versione la risposta torna vuota, disattivare *Enable Thinking* nelle impostazioni del modello: con l'opzione attiva il modello consuma i token nel ragionamento e l'assistente risponde che non riesce a costruire un piano valido.
 
 I vettori dell'indice dei tool nel dump sono stati calcolati con il modello di embedding indicato. A ogni avvio il server sincronizza l'indice riusando i vettori già presenti, riconosciuti dall'hash del testo e dal *nome* del modello, che però non distingue publisher e quantizzazione. Usando un'altra versione di multilingual-e5-large-instruct, eseguire prima del primo avvio `TRUNCATE mcp_tool_indice;`: il server ricalcolerà l'indice con il modello configurato.
 
