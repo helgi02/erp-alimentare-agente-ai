@@ -133,7 +133,12 @@ const
     '- DISAMBIGUAZIONE: mostra i candidati e chiedi all''utente quale intende.'#10 +
     '- CONFERMA_RICHIESTA: descrivi l''operazione proposta e chiedi conferma esplicita.'#10 +
     '- PASSO_NON_COPERTO: di'' quale parte della richiesta il gestionale non sa ancora fare.'#10 +
-    '- Se un periodo o un filtro è stato applicato, dichiaralo.'#10;
+    '- Se un periodo o un filtro è stato applicato, dichiaralo.'#10 +
+    '- VISTE: se un risultato contiene "apertura_vista" o "aperture_vista", la schermata e'' gestita dal ' +
+    'server. Se "modalita" e'' "pulsante", sotto la tua risposta compare un pulsante: NON nominare ne'' la ' +
+    'schermata ne'' il pulsante e non scrivere frasi come "pulsante disponibile". Se "modalita" manca, la ' +
+    'schermata e'' GIA'' aperta: puoi dirlo in una frase breve, ma NON chiedere se l''utente vuole aprirla o ' +
+    'visualizzarla. In entrambi i casi puoi comunque proporre altro (ad esempio modifiche).'#10;
 
   // Messaggio utente del Synthesizer: prima della richiesta.
   PROMPT_MESSAGGIO_SINTESI_RICHIESTA =

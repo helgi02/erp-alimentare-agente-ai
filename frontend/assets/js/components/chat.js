@@ -736,7 +736,12 @@ App.Chat = {
             btn.className = 'btn btn-outline-primary btn-sm chat-choice-btn';
             btn.textContent = risolta.etichetta +
                 (risultatoApriVista.riferimento ? ' (' + risultatoApriVista.riferimento + ')' : '');
-            btn.addEventListener('click', () => App.Router.vaiA(risolta.url));
+            // Stesso segnale visivo dell'apertura diretta (App.Router.evidenzia):
+            // anche cliccando il pulsante si vede che la vista e' stata aperta
+            // dall'agente, anche se era gia' quella corrente.
+            btn.addEventListener('click', () => {
+                Promise.resolve(App.Router.vaiA(risolta.url)).then(() => App.Router.evidenzia());
+            });
             gruppo.appendChild(btn);
             div.appendChild(gruppo);
             this.elencoMessaggi.appendChild(div);
