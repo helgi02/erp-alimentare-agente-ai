@@ -21,6 +21,7 @@ interface
         FMVC: TMVCEngine;
         FMCPServer: TMCPServer;
 
+        // DEBUG TEMPORANEO: logga il body delle POST a /mcp.
         procedure WebModuleBeforeDispatch(Sender: TObject; Request: TWebRequest;
           Response: TWebResponse; var Handled: Boolean);
 
@@ -53,6 +54,7 @@ uses
 
 procedure TWebModule1.WebModuleCreate(Sender: TObject);
 begin
+  // DEBUG TEMPORANEO: hook WebBroker, vede la richiesta prima di DMVCFramework.
   Self.BeforeDispatch := WebModuleBeforeDispatch;
 
   FMVC := TMVCEngine.Create(Self,
@@ -78,7 +80,7 @@ begin
     )
   );
 
-  // File di generate_csv/generate_pdf, serviti su /export. Prima dei controller.
+  // File di generate_csv/generate_pdf serviti su /export. Prima dei controller.
   FMVC.AddMiddleware(
     TMVCStaticFilesMiddleware.Create('/export', TConfig.GetInstance.ExportFolder)
   );
@@ -86,6 +88,7 @@ begin
   FMVC.AddController(TControllerFornitori);
   FMVC.AddController(TControllerClienti);
   FMVC.AddController(TControllerMateriePrime);
+  // Dati aggregati della home in un solo GET.
   FMVC.AddController(TControllerDashboard);
   FMVC.AddController(TControllerOrdiniVendita);
   FMVC.AddController(TControllerProdottiFiniti);
@@ -95,13 +98,16 @@ begin
   FMVC.AddController(TControllerLottiMateriePrime);
   FMVC.AddController(TControllerLottiSemilavorati);
   FMVC.AddController(TControllerLottiProdottiFiniti);
+  // Tracciabilita' di un lotto (scenario 1).
   FMVC.AddController(TControllerTracciabilita);
+  // Chat con l'agente (orchestratore in services/uServiziAgente.pas).
   FMVC.AddController(TAIAgentController);
+  // Invio delle email corrette dall'utente nell'anteprima della chat.
   FMVC.AddController(TControllerEmail);
 
-  // Server MCP: singleton, provider registrati in uFrmMain.
+  // Server MCP: singleton, provider registrati in uFrmMain.pas.
   FMCPServer := TMCPServer.Instance;
-  // Factory: un TMCPEndpoint nuovo per ogni richiesta a /mcp.
+  // Factory: un TMCPEndpoint nuovo per ogni richiesta a /mcp (lo stesso che crea uMCPBridge).
   FMVC.PublishObject(
     function: TObject
     begin
@@ -112,6 +118,8 @@ begin
 
 end;
 
+// DEBUG TEMPORANEO (errore "Wrong parameters count" da LM Studio su /mcp).
+// Handled resta False: il hook osserva soltanto.
 procedure TWebModule1.WebModuleBeforeDispatch(Sender: TObject; Request: TWebRequest;
   Response: TWebResponse; var Handled: Boolean);
 begin
@@ -123,7 +131,7 @@ end;
 
 procedure TWebModule1.WebModuleDestroy(Sender: TObject);
 begin
-  // FMCPServer e' un singleton condiviso, liberato dalla libreria a fine processo.
+  // FMCPServer e' il singleton condiviso: lo libera la libreria a fine processo.
   FMVC.Free;
 end;
 

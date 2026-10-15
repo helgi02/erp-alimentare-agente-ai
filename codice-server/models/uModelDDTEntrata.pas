@@ -9,11 +9,21 @@ uses
   DbU;
 
 type
-  // Testata di un DDT di entrata da un fornitore (ddt_entrata). Le sue righe generano i
-  // lotti di materia prima: e' l'origine documentale di ogni lotto, punto di partenza della
-  // tracciabilita' a ritroso.
-  // DataEmissione (il fornitore emette) e DataRicezione (la merce arriva) sono eventi
-  // diversi: la prima serve alla tracciabilita' documentale, la seconda alla logistica.
+  // Rappresenta la testata di un documento di trasporto in entrata da un
+  // fornitore (tabella ddt_entrata). E' il documento che accompagna
+  // fisicamente la merce ricevuta: le sue righe (ddt_entrata_righe, vedi
+  // TDDTEntrataRiga) generano a loro volta i lotti di materia prima
+  // (lotti_materie_prime.ddt_entrata_riga_id) — il DDT e' quindi
+  // l'origine documentale di ogni lotto in giacenza, punto di partenza
+  // per la tracciabilita' a ritroso (chi ci ha fornito questo lotto e
+  // quando e' arrivato).
+  //
+  // DataEmissione vs DataRicezione: il DDL le distingue esplicitamente
+  // (vedi commenti colonna) perche' sono eventi diversi — il fornitore
+  // emette il documento, ma la merce puo' arrivare in azienda in un
+  // giorno successivo. Entrambe le date sono rilevanti: la prima per la
+  // tracciabilita' documentale, la seconda per la logistica di
+  // magazzino.
   TDDTEntrata = class
   private
     FID: Integer;
@@ -36,9 +46,12 @@ type
     property FornitoreID: Integer read FFornitoreID write FFornitoreID;
     property Note: string read FNote write FNote;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ddt_entrata_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TDDTEntrata;
     class function GetByNumero(const ANumeroDDT: string; AFornitoreID: Integer): TDDTEntrata;
     class function GetAll: TObjectList<TDDTEntrata>;
@@ -60,6 +73,8 @@ const
     'SELECT id, numero_ddt, data_emissione, data_ricezione, fornitore_id, ' +
     'note, creato_il, aggiornato_il ' +
     'FROM ddt_entrata ';
+
+{ TDDTEntrata }
 
 constructor TDDTEntrata.Create;
 begin
@@ -102,8 +117,9 @@ class function TDDTEntrata.GetByNumero(const ANumeroDDT: string; AFornitoreID: I
 var
   LAutoQuery: TAutoQuery;
 begin
-  // numero_ddt e' univoco solo insieme a fornitore_id (uq_ddt_entrata_numero_fornitore):
-  // ogni fornitore numera per conto suo.
+  // numero_ddt e' univoco solo insieme a fornitore_id (vincolo
+  // uq_ddt_entrata_numero_fornitore): fornitori diversi possono
+  // numerare i propri DDT in modo indipendente.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -148,8 +164,10 @@ var
   LAutoQuery: TAutoQuery;
   LDDT: TDDTEntrata;
 begin
-  // Storico DDT di un fornitore, dal piu' recente. Serve nel richiamo per trovare il
-  // fornitore di una materia prima non conforme.
+  // Storico DDT di un fornitore, dal piu' recente. Utile sia per
+  // consultazioni ordinarie sia come query di supporto quando lo
+  // scenario di ritiro/richiamo deve verificare da quale fornitore
+  // proviene una materia prima non conforme.
   Result := TObjectList<TDDTEntrata>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -171,8 +189,12 @@ end;
 
 class function TDDTEntrata.Delete(AID: Integer): Boolean;
 begin
-  // Fallisce se il DDT ha righe (e lotti generati): nessun ON DELETE CASCADE. Voluto, e' un
-  // dato fiscale e di tracciabilita'.
+  // Un DDT entrata e' referenziato da ddt_entrata_righe, che a sua volta
+  // e' referenziato da lotti_materie_prime: in assenza di ON DELETE
+  // CASCADE lato DB, la query fallisce se il DDT ha gia' righe (e a
+  // maggior ragione se quelle righe hanno gia' generato lotti).
+  // Comportamento voluto: un documento di trasporto ricevuto e' un dato
+  // fiscale/di tracciabilita', non va cancellato una volta registrato.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ddt_entrata WHERE id = :id', [AID]);
 end;
@@ -181,8 +203,10 @@ function TDDTEntrata.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
-  // un'eccezione da gestire nel controller.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
+  // (numero_ddt, fornitore_id) ha un vincolo UNIQUE: un duplicato
+  // solleva un'eccezione da gestire a livello di controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ddt_entrata ' +
     '(numero_ddt, data_emissione, data_ricezione, fornitore_id, note) ' +
@@ -203,7 +227,8 @@ function TDDTEntrata.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ddt_entrata_aggiornato_il lo valorizza automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ddt_entrata SET numero_ddt = :numero_ddt, ' +
     'data_emissione = :data_emissione, data_ricezione = :data_ricezione, ' +
@@ -249,7 +274,8 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<string>('numero_ddt', LValStr) then
     FNumeroDDT := LValStr;
   if AJSON.TryGetValue<string>('data_emissione', LValStr) then

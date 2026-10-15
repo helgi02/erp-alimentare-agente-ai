@@ -9,10 +9,15 @@ uses
   DbU;
 
 type
-  // Riga di ordine di vendita: un prodotto finito assegnato a un lotto specifico
-  // (ordini_vendita_righe). LottoProdottoFinitoID e' obbligatorio fin dall'ordine: per
-  // sapere se un cliente ha ricevuto un lotto serve il lotto, non il prodotto. E' il dato
-  // chiave del richiamo.
+  // Rappresenta una riga di un ordine di vendita: un prodotto finito
+  // venduto, assegnato a un LOTTO SPECIFICO (tabella
+  // ordini_vendita_righe). A differenza di una riga d'ordine fornitore
+  // (che referenzia solo l'anagrafica materia prima), qui
+  // LottoProdottoFinitoID e' obbligatorio fin dall'ordine: come segnala
+  // il commento della colonna nel DDL, e' il dato chiave per la
+  // tracciabilita' dello scenario di ritiro/richiamo — per sapere se un
+  // cliente ha ricevuto un lotto specifico non basta sapere "quale
+  // prodotto" ha comprato, serve sapere "quale lotto".
   TOrdineVenditaRiga = class
   private
     FID: Integer;
@@ -37,9 +42,12 @@ type
     property UnitaMisura: string read FUnitaMisura write FUnitaMisura;
     property PrezzoUnitario: Currency read FPrezzoUnitario write FPrezzoUnitario;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ordini_vendita_righe_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TOrdineVenditaRiga;
     class function GetAll: TObjectList<TOrdineVenditaRiga>;
     class function GetByOrdineVendita(AOrdineVenditaID: Integer): TObjectList<TOrdineVenditaRiga>;
@@ -61,6 +69,8 @@ const
     'SELECT id, ordine_vendita_id, prodotto_finito_id, lotto_prodotto_finito_id, ' +
     'quantita, unita_misura, prezzo_unitario, creato_il, aggiornato_il ' +
     'FROM ordini_vendita_righe ';
+
+{ TOrdineVenditaRiga }
 
 constructor TOrdineVenditaRiga.Create;
 begin
@@ -149,8 +159,9 @@ var
   LAutoQuery: TAutoQuery;
   LRiga: TOrdineVenditaRiga;
 begin
-  // A valle: dato un lotto di prodotto finito, le righe ordine (quindi i clienti) che
-  // l'hanno acquistato.
+  // Query "a valle" essenziale per lo scenario di ritiro/richiamo: dato
+  // un lotto di prodotto finito coinvolto, quali righe ordine (quindi
+  // quali clienti, tramite l'ordine) lo hanno gia' acquistato.
   Result := TObjectList<TOrdineVenditaRiga>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -171,8 +182,10 @@ end;
 
 class function TOrdineVenditaRiga.Delete(AID: Integer): Boolean;
 begin
-  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
-  // perdere dati di tracciabilita'.
+  // Una riga ordine vendita e' referenziata da ddt_uscita_righe
+  // (ordine_vendita_riga_id): in assenza di ON DELETE CASCADE lato DB,
+  // la query fallisce se la riga e' gia' stata (anche parzialmente)
+  // evasa da una spedizione. Comportamento voluto.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ordini_vendita_righe WHERE id = :id', [AID]);
 end;
@@ -181,7 +194,8 @@ function TOrdineVenditaRiga.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il/aggiornato_il: DEFAULT del database.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ordini_vendita_righe ' +
     '(ordine_vendita_id, prodotto_finito_id, lotto_prodotto_finito_id, ' +
@@ -205,7 +219,8 @@ function TOrdineVenditaRiga.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ordini_vendita_righe_aggiornato_il lo valorizza automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ordini_vendita_righe SET ordine_vendita_id = :ordine_vendita_id, ' +
     'prodotto_finito_id = :prodotto_finito_id, ' +
@@ -256,7 +271,8 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<Integer>('ordine_vendita_id', LValInt) then
     FOrdineVenditaID := LValInt;
   if AJSON.TryGetValue<Integer>('prodotto_finito_id', LValInt) then
@@ -266,7 +282,8 @@ begin
   if AJSON.TryGetValue<string>('unita_misura', LValStr) then
     FUnitaMisura := LValStr;
 
-  // Decimali letti come TJSONNumber, per non perdere precisione.
+  // Campi numerici decimali: letti come TJSONNumber per preservarne la
+  // precisione (evitando conversioni intermedie a Double)
   if AJSON.TryGetValue<TJSONValue>('quantita', LValNum) and (LValNum is TJSONNumber) then
     FQuantita := TJSONNumber(LValNum).AsDouble;
   if AJSON.TryGetValue<TJSONValue>('prezzo_unitario', LValNum) and (LValNum is TJSONNumber) then

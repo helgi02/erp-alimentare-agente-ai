@@ -9,11 +9,17 @@ uses
   DbU;
 
 type
-  // Testata di un DDT di uscita verso un cliente (ddt_uscita). Speculare a TDDTEntrata, ma
-  // con OrdineVenditaID: un DDT di uscita nasce sempre per evadere un ordine esistente. Le
-  // righe referenziano ordini_vendita_righe e cosi' si traccia quale riga ordine e' stata
-  // evasa da quale spedizione: dato chiave per sapere quali clienti hanno ricevuto un
-  // lotto.
+  // Rappresenta la testata di un documento di trasporto in uscita verso
+  // un cliente (tabella ddt_uscita). Speculare a TDDTEntrata, con una
+  // differenza strutturale: qui c'e' anche OrdineVenditaID, perche' un
+  // DDT di uscita nasce sempre per evadere un ordine di vendita gia'
+  // esistente (a differenza del DDT di entrata, che accompagna un
+  // acquisto senza bisogno di un "ordine" formale modellato a parte in
+  // questo schema). Le righe (ddt_uscita_righe, vedi TDDTUscitaRiga)
+  // referenziano infatti ordini_vendita_righe, non un prodotto/lotto
+  // generico: e' cosi' che si traccia quale riga ordine e' stata evasa
+  // da quale spedizione — dato chiave per lo scenario di ritiro/richiamo
+  // quando serve sapere quali clienti hanno gia' ricevuto un lotto.
   TDDTUscita = class
   private
     FID: Integer;
@@ -38,9 +44,12 @@ type
     property OrdineVenditaID: Integer read FOrdineVenditaID write FOrdineVenditaID;
     property Note: string read FNote write FNote;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ddt_uscita_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TDDTUscita;
     class function GetByNumero(const ANumeroDDT: string; AClienteID: Integer): TDDTUscita;
     class function GetAll: TObjectList<TDDTUscita>;
@@ -63,6 +72,8 @@ const
     'SELECT id, numero_ddt, data_emissione, data_spedizione, cliente_id, ' +
     'ordine_vendita_id, note, creato_il, aggiornato_il ' +
     'FROM ddt_uscita ';
+
+{ TDDTUscita }
 
 constructor TDDTUscita.Create;
 begin
@@ -106,7 +117,8 @@ class function TDDTUscita.GetByNumero(const ANumeroDDT: string; AClienteID: Inte
 var
   LAutoQuery: TAutoQuery;
 begin
-  // numero_ddt e' univoco solo insieme a cliente_id (uq_ddt_uscita_numero_cliente).
+  // numero_ddt e' univoco solo insieme a cliente_id (vincolo
+  // uq_ddt_uscita_numero_cliente).
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -151,8 +163,9 @@ var
   LAutoQuery: TAutoQuery;
   LDDT: TDDTUscita;
 begin
-  // Storico spedizioni verso un cliente, dal piu' recente. Per le interrogazioni vendite
-  // (2.2) sulle consegne.
+  // Storico spedizioni verso un cliente, dal piu' recente. Base per lo
+  // scenario di interrogazione vendite (2.2) quando la richiesta
+  // riguarda le consegne piuttosto che gli ordini.
   Result := TObjectList<TDDTUscita>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -177,7 +190,8 @@ var
   LAutoQuery: TAutoQuery;
   LDDT: TDDTUscita;
 begin
-  // Tutti i DDT di un ordine (puo' essere evaso con spedizioni parziali).
+  // Un ordine di vendita puo' essere evaso con piu' spedizioni parziali:
+  // questo metodo restituisce tutti i DDT generati per un dato ordine.
   Result := TObjectList<TDDTUscita>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -199,8 +213,10 @@ end;
 
 class function TDDTUscita.Delete(AID: Integer): Boolean;
 begin
-  // Fallisce se il DDT ha righe (nessun ON DELETE CASCADE). Voluto, e' un dato fiscale e di
-  // tracciabilita'.
+  // Un DDT uscita e' referenziato da ddt_uscita_righe: in assenza di ON
+  // DELETE CASCADE lato DB, la query fallisce se il DDT ha gia' righe.
+  // Comportamento voluto: un documento di trasporto emesso e' un dato
+  // fiscale/di tracciabilita', non va cancellato una volta registrato.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ddt_uscita WHERE id = :id', [AID]);
 end;
@@ -209,8 +225,10 @@ function TDDTUscita.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
-  // un'eccezione da gestire nel controller.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
+  // (numero_ddt, cliente_id) ha un vincolo UNIQUE: un duplicato solleva
+  // un'eccezione da gestire a livello di controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ddt_uscita ' +
     '(numero_ddt, data_emissione, data_spedizione, cliente_id, ordine_vendita_id, note) ' +
@@ -231,7 +249,8 @@ function TDDTUscita.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ddt_uscita_aggiornato_il lo valorizza automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ddt_uscita SET numero_ddt = :numero_ddt, ' +
     'data_emissione = :data_emissione, data_spedizione = :data_spedizione, ' +
@@ -279,7 +298,8 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<string>('numero_ddt', LValStr) then
     FNumeroDDT := LValStr;
   if AJSON.TryGetValue<string>('data_emissione', LValStr) then

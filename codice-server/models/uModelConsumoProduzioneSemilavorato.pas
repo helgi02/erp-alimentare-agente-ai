@@ -11,14 +11,26 @@ uses
   DbU;
 
 type
-  // Un componente consumato per produrre un lotto di semilavorato
-  // (consumi_produzione_semilavorati). La ricetta dice la dose standard; qui si registrano
-  // il lotto usato e la quantita' reale (QuantitaConsumata).
-  // E' la tabella chiave della tracciabilita' a ritroso del richiamo: da un lotto di
-  // materia prima non conforme (LottoMateriaPrimaID) si trovano i lotti di semilavorato che
-  // l'hanno consumato e, via LottoSemilavoratoFiglioID, tutta la catena multi-livello.
-  // Il componente e' esattamente uno fra lotto di materia prima e lotto di semilavorato
-  // (chk_componente_consumo_semilavorato); 0 = NULL.
+  // Traccia UN componente consumato per produrre un lotto di semilavorato
+  // (tabella consumi_produzione_semilavorati). E' la riga che "mette in
+  // pratica" una riga di ricetta (TRicettaSemilavoratoRiga): mentre la
+  // ricetta descrive la dose STANDARD per un materiale generico, questa
+  // tabella registra quale LOTTO specifico e' stato effettivamente
+  // usato e in quale quantita' REALE (QuantitaConsumata, che puo'
+  // differire dalla dose standard).
+  //
+  // E' la tabella chiave per la tracciabilita' a ritroso dello scenario
+  // di ritiro/richiamo: dato un lotto di materia prima non conforme, si
+  // cerca qui (per LottoMateriaPrimaID) per scoprire quali lotti di
+  // semilavorato lo hanno consumato — e da li', ricorsivamente, tramite
+  // LottoSemilavoratoFiglioID, si risale l'intera catena di produzione
+  // multi-livello.
+  //
+  // Stesso pattern XOR di TRicettaSemilavoratoRiga: il componente
+  // consumato e' ESATTAMENTE UNO tra un lotto di materia prima
+  // (LottoMateriaPrimaID) o un lotto di un altro semilavorato
+  // (LottoSemilavoratoFiglioID) — mai entrambi, mai nessuno
+  // (chk_componente_consumo_semilavorato). Sentinella 0 = NULL.
   TConsumoProduzioneSemilavorato = class
   private
     FID: Integer;
@@ -42,9 +54,12 @@ type
     property QuantitaConsumata: Currency read FQuantitaConsumata write FQuantitaConsumata;
     property IsComponenteMateriaPrima: Boolean read GetIsComponenteMateriaPrima;
 
+    // Campo di audit: sola lettura, gestito dal database (default/trigger
+    // trg_consumi_produzione_semilavorati_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TConsumoProduzioneSemilavorato;
     class function GetByLottoSemilavorato(ALottoSemilavoratoID: Integer): TObjectList<TConsumoProduzioneSemilavorato>;
     class function GetByLottoMateriaPrima(ALottoMateriaPrimaID: Integer): TObjectList<TConsumoProduzioneSemilavorato>;
@@ -53,9 +68,12 @@ type
 
     function Insert: Integer; overload;   // restituisce l'ID generato (connessione pooled propria)
 
-    // Overload per TServizioGiacenza: scrive sulla connessione ricevuta (transazione del
-    // chiamante), cosi' insert e decremento della giacenza del lotto componente
-    // (DecrementaQuantitaDisponibile) condividono commit/rollback.
+    // Overload pensato per TServizioGiacenza: scrive sulla connessione
+    // ricevuta (gia' dentro una transazione aperta dal chiamante) invece
+    // che su una connessione pooled dedicata, cosi' questo insert e il
+    // decremento della giacenza del lotto componente (vedi
+    // TLottoMateriaPrima/TLottoSemilavorato.DecrementaQuantitaDisponibile)
+    // condividono lo stesso commit/rollback.
     function Insert(AConnection: TFDConnection): Integer; overload;
 
     function Update: Boolean;
@@ -73,6 +91,8 @@ const
     'lotto_semilavorato_figlio_id, quantita_consumata, creato_il, aggiornato_il ' +
     'FROM consumi_produzione_semilavorati ';
 
+{ TConsumoProduzioneSemilavorato }
+
 constructor TConsumoProduzioneSemilavorato.Create;
 begin
   inherited Create;
@@ -88,7 +108,7 @@ end;
 
 procedure TConsumoProduzioneSemilavorato.EnsureComponenteValido;
 begin
-  // Replica il CHECK chk_componente_consumo_semilavorato.
+  // Replica lato Delphi il CHECK chk_componente_consumo_semilavorato.
   if (FLottoMateriaPrimaID <> 0) = (FLottoSemilavoratoFiglioID <> 0) then
     raise Exception.Create(
       'TConsumoProduzioneSemilavorato: la riga deve avere ESATTAMENTE uno tra ' +
@@ -140,7 +160,8 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneSemilavorato;
 begin
-  // Componenti consumati per un lotto: la distinta base effettiva.
+  // Tutti i componenti consumati per produrre un dato lotto di
+  // semilavorato: la "distinta base effettiva" di quel lotto specifico.
   Result := TObjectList<TConsumoProduzioneSemilavorato>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -165,8 +186,9 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneSemilavorato;
 begin
-  // A ritroso: i lotti di semilavorato che hanno consumato un lotto di materia prima. Primo
-  // passo della risalita nel richiamo.
+  // Query "a ritroso": dato un lotto di materia prima (es. non
+  // conforme), quali lotti di semilavorato lo hanno consumato. Primo
+  // passo della risalita di filiera nello scenario di ritiro/richiamo.
   Result := TObjectList<TConsumoProduzioneSemilavorato>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -191,8 +213,10 @@ var
   LAutoQuery: TAutoQuery;
   LConsumo: TConsumoProduzioneSemilavorato;
 begin
-  // A ritroso: i lotti di semilavorato "genitore" che hanno consumato un lotto di
-  // semilavorato (distinta multi-livello).
+  // Query "a ritroso" analoga alla precedente, ma quando il componente
+  // non conforme e' a sua volta un lotto di semilavorato (distinta base
+  // multi-livello): a quali lotti di semilavorato "genitore" e' stato
+  // consumato.
   Result := TObjectList<TConsumoProduzioneSemilavorato>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -213,7 +237,9 @@ end;
 
 class function TConsumoProduzioneSemilavorato.Delete(AID: Integer): Boolean;
 begin
-  // Nodo foglia: nessuna FK lo referenzia.
+  // Nessun'altra tabella referenzia consumi_produzione_semilavorati come
+  // FK: nodo foglia nello schema. Va comunque usata con cautela: e' un
+  // dato di tracciabilita' di produzione gia' avvenuta.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM consumi_produzione_semilavorati WHERE id = :id', [AID]);
 end;
@@ -228,7 +254,8 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoFiglioID = 0 then LSemilavoratoFiglioParam := Null else LSemilavoratoFiglioParam := FLottoSemilavoratoFiglioID;
 
-  // creato_il/aggiornato_il: DEFAULT del database.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO consumi_produzione_semilavorati ' +
     '(lotto_semilavorato_id, lotto_materia_prima_id, lotto_semilavorato_figlio_id, quantita_consumata) ' +
@@ -255,8 +282,11 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoFiglioID = 0 then LSemilavoratoFiglioParam := Null else LSemilavoratoFiglioParam := FLottoSemilavoratoFiglioID;
 
-  // Come l'overload senza parametri, ma su AConnection (transazione del chiamante).
-  // LQuery.Open e non ExecSQL perche' si legge la riga del RETURNING.
+  // Stessa INSERT dell'overload senza parametri, ma eseguita su
+  // AConnection (gia' dentro una transazione aperta dal chiamante,
+  // tipicamente TServizioGiacenza) invece che su una connessione pooled
+  // dedicata: LQuery.Open (non ExecSQL) perche' serve leggere la riga
+  // restituita dalla clausola RETURNING.
   LQuery := TFDQuery.Create(nil);
   try
     LQuery.Connection := AConnection;
@@ -290,7 +320,9 @@ begin
   if FLottoMateriaPrimaID = 0 then LMateriaPrimaParam := Null else LMateriaPrimaParam := FLottoMateriaPrimaID;
   if FLottoSemilavoratoFiglioID = 0 then LSemilavoratoFiglioParam := Null else LSemilavoratoFiglioParam := FLottoSemilavoratoFiglioID;
 
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_consumi_produzione_semilavorati_aggiornato_il lo valorizza
+  // automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE consumi_produzione_semilavorati SET lotto_semilavorato_id = :lotto_semilavorato_id, ' +
     'lotto_materia_prima_id = :lotto_materia_prima_id, ' +
@@ -342,7 +374,8 @@ var
   LValInt: Integer;
   LValNum: TJSONValue;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<Integer>('lotto_semilavorato_id', LValInt) then
     FLottoSemilavoratoID := LValInt;
   if AJSON.TryGetValue<Integer>('lotto_materia_prima_id', LValInt) then
@@ -350,7 +383,8 @@ begin
   if AJSON.TryGetValue<Integer>('lotto_semilavorato_figlio_id', LValInt) then
     FLottoSemilavoratoFiglioID := LValInt;
 
-  // Decimali letti come TJSONNumber, per non perdere precisione.
+  // Campo numerico decimale: letto come TJSONNumber per preservarne la
+  // precisione (evitando conversioni intermedie a Double)
   if AJSON.TryGetValue<TJSONValue>('quantita_consumata', LValNum) and (LValNum is TJSONNumber) then
     FQuantitaConsumata := TJSONNumber(LValNum).AsDouble;
 end;

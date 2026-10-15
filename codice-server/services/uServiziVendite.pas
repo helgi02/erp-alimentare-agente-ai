@@ -11,13 +11,18 @@ uses
   DbU;
 
 type
-  // Esito della risoluzione di un valore testuale (un elemento di ragione_sociale_cliente o
-  // nome_prodotto) sulla rispettiva anagrafica. Il modello non conosce gli ID interni,
-  // esprime i filtri come testo: questo passo li traduce in ID prima di costruire la query.
+  // Esito della risoluzione di UN valore testuale (un elemento
+  // dell'array ragione_sociale_cliente o nome_prodotto passato dal
+  // modello) sulla rispettiva anagrafica. Il modello non conosce gli ID
+  // interni (cliente_id, prodotto_finito_id): puo' solo esprimere un
+  // filtro come testo, quindi questo e' il passo che traduce testo -> ID,
+  // PRIMA di costruire qualunque query di vendite.
   TEsitoRisoluzione = (erRisolto, erAmbiguo, erNonTrovato);
 
-  // Candidato proposto quando la risoluzione e' ambigua (o anche se risolta): abbastanza
-  // informazione per distinguere clienti/prodotti con nome simile.
+  // Un candidato restituito quando la risoluzione e' ambigua (o, per
+  // comodita' del chiamante, anche quando e' risolta con successo):
+  // abbastanza informazione perche' un utente possa distinguere due
+  // clienti/prodotti con nome simile.
   TCandidatoCliente = record
     ID: Integer;
     RagioneSociale: string;
@@ -30,9 +35,12 @@ type
     Denominazione: string;
   end;
 
-  // Risultato di RisolviCliente per un valore. ClienteID e' valido solo se Esito =
-  // erRisolto; Candidati e' valorizzato se erAmbiguo (tutti i match, da proporre
-  // all'utente) o erRisolto (il singolo match, non obbligatorio da usare).
+  // Risultato di TServizioVendite.RisolviCliente per un singolo valore
+  // cercato. ClienteID e' valido solo se Esito = erRisolto; Candidati e'
+  // valorizzato se Esito = erAmbiguo (tutti i match trovati, perche' il
+  // tool provider deve poterli proporre all'utente) o erRisolto (il
+  // singolo match, per comodita' - non e' obbligatorio usarlo in quel
+  // caso).
   TRisoluzioneCliente = class
   public
     ValoreCercato: string;
@@ -49,10 +57,14 @@ type
     Candidati: TArray<TCandidatoProdotto>;
   end;
 
-  // Riga di dettaglio di un'interrogazione vendite: un prodotto venduto in un ordine che
-  // soddisfa i filtri (riga del JOIN ordini_vendita + righe + clienti + prodotti). DTO di
-  // sola lettura per il tool_result; porta i nomi (ragione sociale, denominazione) e non
-  // solo gli ID, che il modello non saprebbe interpretare.
+  // Una riga di dettaglio nel risultato di un'interrogazione vendite: un
+  // prodotto venduto in un ordine che soddisfa i filtri (equivale a una
+  // riga del JOIN ordini_vendita + ordini_vendita_righe + clienti +
+  // anagrafiche_prodotti_finiti). Non e' un model persistito ne' un
+  // oggetto con Insert/Update: e' un DTO di sola lettura, pensato per
+  // essere serializzato dal tool provider nel tool_result. Per lo stesso
+  // motivo porta gia' i NOMI (ragione sociale, denominazione), non solo
+  // gli ID: il modello non saprebbe interpretare un ID nudo.
   TRigaVenditaDettaglio = class
   public
     OrdineID: Integer;
@@ -69,10 +81,17 @@ type
     Importo: Currency; // Quantita * PrezzoUnitario, calcolato qui una volta per tutte
   end;
 
-  // Esito positivo di InterrogaVendite: periodo effettivamente applicato (puo' essere il
-  // default "ultimo mese", va restituito cosi' il modello lo dichiara), aggregato
-  // complessivo e dettaglio. Non aggrega per cliente/prodotto con array di piu' elementi
-  // (confronto multi-entita'): incremento successivo, non ancora implementato.
+  // Esito "positivo" di InterrogaVendite: il periodo EFFETTIVAMENTE
+  // applicato (puo' essere il default "ultimo mese", non esplicitato dal
+  // chiamante - per questo va restituito, non solo usato internamente,
+  // cosi' il modello puo' dichiararlo in risposta invece di lasciare
+  // l'utente a chiedersi "ma di che periodo sta parlando?"), l'aggregato
+  // complessivo e il dettaglio riga per riga.
+  //
+  // Non aggregato PER cliente/prodotto quando gli array hanno piu' di un
+  // elemento (utile per un vero confronto multi-entita'): e' il
+  // prossimo incremento, non ancora implementato in questa prima
+  // versione - vedi nota nella conversazione di progetto.
   TRisultatoVendite = class
   public
     DataInizio: TDateTime;
@@ -86,51 +105,98 @@ type
     destructor Destroy; override;
   end;
 
-  // Servizio dello scenario 2.2 (interrogazione vendite ad hoc), per il tool
-  // get_list_vendite: 1) risolve i filtri testuali (cliente, prodotto) sulle anagrafiche
-  // gestendo l'ambiguita'; 2) costruisce ed esegue la query aggregata con WHERE dinamica
-  // per qualunque combinazione di filtri opzionali. E' l'unica classe che sa costruire la
-  // query, cosi' il tool resta uno solo (principio "tool generico e parametrico").
+  // Layer Services per lo scenario 2.2 del tirocinio (interrogazione
+  // vendite ad hoc). Incapsula le due responsabilita' che il tool MCP
+  // get_list_vendite delega qui:
+  //   1) risolvere i filtri testuali (nome cliente/prodotto) sulle
+  //      rispettive anagrafiche, gestendo i casi di ambiguita';
+  //   2) costruire ed eseguire la query aggregata con WHERE dinamica a
+  //      partire da qualunque combinazione di filtri opzionali.
+  //
+  // Principio "tool generico e parametrico" (documento di progetto,
+  // sezione 4): tutti i filtri sono opzionali e liberamente componibili;
+  // questa classe e' l'UNICA che sa costruire la query per qualsiasi
+  // combinazione, cosi' il tool MCP resta uno solo (get_list_vendite),
+  // invece di un tool per ogni combinazione di filtri.
   TServizioVendite = class
   private
-    // Placeholder posizionali ":pN" per un IN (...) di lunghezza variabile. AStartIndex e'
-    // il numero di parametri gia' presenti in Params: TDB.getQueryResult lega per
-    // posizione, quindi il nome conta solo per essere univoco.
+    // Costruisce un elenco di placeholder posizionali ":pN" per una
+    // clausola IN (...) con un numero variabile di elementi.
+    // AStartIndex e' il numero di parametri GIA' aggiunti all'array
+    // Params prima di questa clausola: TDB.getQueryResult lega i valori
+    // per POSIZIONE (Params[i] nell'ordine in cui i nomi compaiono nella
+    // query), quindi il nome del placeholder conta solo per essere
+    // univoco all'interno della query - non deve avere un significato,
+    // deve solo evitare collisioni con altri placeholder gia' usati.
     class function BuildPlaceholders(ACount, AStartIndex: Integer): string;
 
-    // Query aggregata con WHERE dinamica sugli ID risolti: qui non c'e' piu' ambiguita'.
-    // ANessunFiltro (vedi InterrogaVendite): se True (cliente, prodotto e periodo assenti)
-    // niente WHERE dinamica, solo le ultime vendite senza vincolo di periodo, limitate a
-    // MAX_RIGHE_QUERY. Se False, WHERE dinamica su tutti i filtri (periodo incluso, gia'
-    // col default "ultimo mese") con lo stesso LIMIT.
+    // Esegue la query aggregata vera e propria, con WHERE dinamica in
+    // base a quali ID sono stati risolti. A questo punto (chiamato solo
+    // da InterrogaVendite dopo la risoluzione) tutti i filtri testuali
+    // sono gia' diventati ID univoci: qui non c'e' piu' nessuna
+    // ambiguita' da gestire, solo un JOIN con filtro.
+    //
+    // ANessunFiltro (vedi InterrogaVendite): quando True, cliente/prodotto
+    // e periodo sono TUTTI assenti nella richiesta originale - in quel
+    // caso non ha senso costruire una WHERE dinamica (sarebbe solo
+    // "stato <> annullato"): eseguiamo direttamente la query "ultime
+    // vendite", senza vincolo di periodo, limitata a MAX_RIGHE_QUERY
+    // righe. Quando False, resta il comportamento attuale: WHERE dinamica
+    // su tutti i filtri disponibili (incluso il periodo, gia' risolto da
+    // InterrogaVendite col default "ultimo mese"), con lo stesso LIMIT in
+    // coda per coerenza.
     class function EseguiQueryVendite(
       const AClienteIDs, AProdottoIDs: TArray<Integer>;
       ADataInizio, ADataFine: TDateTime;
       ANessunFiltro: Boolean): TRisultatoVendite;
   public
-    // Risolve un valore sull'anagrafica clienti: prima match esatto (ILIKE senza jolly), se
-    // nulla ripiega sul parziale (ILIKE '%valore%'). L'esatto ha la precedenza assoluta: se
-    // l'utente ha scritto il nome preciso (es. da una disambiguazione) non si
-    // riproporrebbero altri candidati.
+    // Risolve un singolo valore testuale sull'anagrafica clienti: prova
+    // prima un match ESATTO (case-insensitive, tramite ILIKE senza
+    // caratteri jolly) sulla ragione sociale; se non trova nulla, ripiega
+    // su un match PARZIALE (ILIKE '%valore%'). Il match esatto ha
+    // precedenza assoluta: se l'utente ha gia' scritto il nome preciso
+    // (es. perche' e' il valore restituito da una precedente
+    // disambiguazione), non ha senso riproporre altri candidati solo
+    // perche' un match piu' lasco ne troverebbe altri.
     class function RisolviCliente(const ANome: string): TRisoluzioneCliente;
 
-    // Come sopra per i prodotti: l'esatto su codice e denominazione (si puo' usare l'uno o
-    // l'altra), il parziale solo sulla denominazione (un codice e' un identificativo
-    // breve).
+    // Come sopra, per l'anagrafica prodotti: il match esatto e' provato
+    // sia sul codice sia sulla denominazione (un operatore puo' riferirsi
+    // al prodotto con l'uno o con l'altra); il match parziale, invece,
+    // solo sulla denominazione - un codice prodotto e' un identificativo
+    // breve, non ha senso cercarlo "contenuto in" un altro codice.
     class function RisolviProdotto(const ANome: string): TRisoluzioneProdotto;
 
-    // Orchestratore, chiamato dal tool provider. Risolve tutti i nomi; se anche uno solo e'
-    // ambiguo o non trovato l'intera richiesta si ferma (Result nil) e tutti i problemi
-    // tornano in AProblemiCliente/AProblemiProdotto: una query parziale presentata come
-    // completa e' peggio di un rifiuto.
-    // AClienteIdEsatto/AProdottoIdEsatto: 0 = non specificato. Se > 0 hanno la precedenza
-    // sull'array di nomi, ignorato: niente ILIKE, quindi niente nuova ambiguita'. Per il
-    // secondo giro dopo una disambiguazione (l'utente ha scelto un id).
-    // ADataInizio/ADataFine = 0: default "ultimo mese" (oggi meno un mese, fino a oggi); il
-    // periodo applicato torna sempre in TRisultatoVendite.
-    // Ownership: se la risoluzione fallisce gli oggetti in
-    // AProblemiCliente/AProblemiProdotto passano al chiamante, che li libera. Se riesce, il
-    // chiamante libera il TRisultatoVendite (il Dettaglio lo libera il distruttore).
+    // Orchestratore principale, pensato per essere chiamato direttamente
+    // dal tool provider. Risolve TUTTI i nomi cliente/prodotto passati
+    // (ogni elemento dei due array); se anche uno solo risulta ambiguo o
+    // non trovato, l'INTERA richiesta si ferma - Result e' nil, e i
+    // problemi (tutti, non solo il primo) sono restituiti in
+    // AProblemiCliente/AProblemiProdotto. Questo evita di eseguire una
+    // query parziale sui filtri validi mentre uno e' irrisolto: in un
+    // dominio di tracciabilita' alimentare un dato parziale presentato
+    // come completo e' peggio di un rifiuto esplicito.
+    //
+    // AClienteIdEsatto/AProdottoIdEsatto: 0 = "non specificato" (stessa
+    // sentinella di ADataInizio/ADataFine sotto). Quando > 0, ha la
+    // PRECEDENZA sul corrispondente array di nomi, che viene ignorato del
+    // tutto: nessuna query ILIKE, nessuna nuova risoluzione, quindi
+    // nessuna nuova ambiguita' possibile per quel filtro. Pensato per il
+    // secondo giro dopo una disambiguazione: il tool provider lo popola
+    // quando l'utente ha scelto un id preciso da un elenco di candidati
+    // gia' proposto (vedi commento su TVenditeToolProvider).
+    //
+    // ADataInizio/ADataFine possono essere 0 (sentinella "non
+    // specificata" dal chiamante): in tal caso viene applicato il
+    // default "ultimo mese" (oggi meno un mese, fino a oggi). Il periodo
+    // EFFETTIVAMENTE applicato torna sempre valorizzato dentro
+    // TRisultatoVendite.
+    //
+    // Ownership: se la risoluzione fallisce, gli oggetti in
+    // AProblemiCliente/AProblemiProdotto passano in proprieta' al
+    // chiamante, che deve liberarli. Se ha successo, il chiamante deve
+    // liberare il TRisultatoVendite restituito (e il suo Dettaglio, gia'
+    // gestito dal distruttore di TRisultatoVendite).
     class function InterrogaVendite(
       const ANomiCliente: TArray<string>;
       AClienteIdEsatto: Integer;
@@ -143,6 +209,8 @@ type
 
 implementation
 
+{ TRisultatoVendite }
+
 constructor TRisultatoVendite.Create;
 begin
   inherited Create;
@@ -154,6 +222,8 @@ begin
   Dettaglio.Free;
   inherited;
 end;
+
+{ TServizioVendite }
 
 class function TServizioVendite.BuildPlaceholders(ACount, AStartIndex: Integer): string;
 var
@@ -202,21 +272,24 @@ begin
 
   if LNome = '' then
   begin
-    // Guardia: ILIKE '%' + '' + '%' = '%%' troverebbe tutti i clienti. Un elemento vuoto e'
-    // un errore di chi chiama: lo si tratta come "non trovato" e non come falso match
-    // universale.
+    // Guardia: un pattern vuoto dentro ILIKE '%' + '' + '%' = '%%'
+    // corrisponderebbe a TUTTI i clienti - l'opposto di quello che
+    // vogliamo. Un elemento vuoto nell'array filtri e' un errore di chi
+    // costruisce la chiamata (il tool provider dovrebbe gia' scartare le
+    // stringhe vuote prima di arrivare qui): lo trattiamo come "non
+    // trovato" invece di restituire un falso match universale.
     Result.Esito := erNonTrovato;
     Exit;
   end;
 
   LCandidati := TList<TCandidatoCliente>.Create;
   try
-    // Passo 1: match esatto (ILIKE senza '%' e' un'uguaglianza senza distinzione di
-    // maiuscole).
+    // Passo 1: match esatto (case-insensitive - ILIKE senza '%' e' un
+    // confronto di uguaglianza case-insensitive in PostgreSQL).
     EseguiRicerca(LNome);
 
-    // Passo 2: solo se l'esatto non trova nulla, il parziale ("Rossi" invece di "Rossi
-    // Srl").
+    // Passo 2: solo se il match esatto non ha trovato nulla, ripiega sul
+    // match parziale (tollerante a "Rossi" invece di "Rossi Srl").
     if LCandidati.Count = 0 then
       EseguiRicerca('%' + LNome + '%');
 
@@ -270,21 +343,23 @@ begin
 
   if LNome = '' then
   begin
-    // Come in RisolviCliente.
+    // Stessa guardia di RisolviCliente: vedi commento li'.
     Result.Esito := erNonTrovato;
     Exit;
   end;
 
   LCandidati := TList<TCandidatoProdotto>.Create;
   try
-    // Passo 1: match esatto su codice o denominazione.
+    // Passo 1: match esatto su CODICE o DENOMINAZIONE (un operatore puo'
+    // riferirsi al prodotto con l'uno o con l'altra).
     EseguiRicerca(
       'SELECT id, codice, denominazione FROM anagrafiche_prodotti_finiti ' +
       'WHERE codice ILIKE :val OR denominazione ILIKE :val ORDER BY denominazione',
       LNome);
 
-    // Passo 2: parziale solo sulla denominazione (un codice non si cerca "contenuto in" un
-    // altro).
+    // Passo 2: match parziale, solo sulla denominazione - un codice
+    // prodotto e' un identificativo breve, cercarlo "contenuto in"
+    // un altro codice non avrebbe senso.
     if LCandidati.Count = 0 then
       EseguiRicerca(
         'SELECT id, codice, denominazione FROM anagrafiche_prodotti_finiti ' +
@@ -313,8 +388,12 @@ class function TServizioVendite.EseguiQueryVendite(
   ADataInizio, ADataFine: TDateTime;
   ANessunFiltro: Boolean): TRisultatoVendite;
 const
-  // I JOIN a clienti e anagrafiche_prodotti_finiti ci sono sempre: servono a restituire i
-  // nomi, di cui il modello ha bisogno. Varia solo il WHERE.
+  // I JOIN a clienti e anagrafiche_prodotti_finiti sono SEMPRE presenti,
+  // a prescindere da quali filtri sono stati passati: servono comunque a
+  // restituire i NOMI in output (un tool_result con soli ID interni
+  // sarebbe inutile al modello, che non li sa interpretare). E' il
+  // WHERE, costruito dinamicamente qui sotto, a variare in base ai
+  // filtri - non la struttura dei JOIN.
   SQL_BASE =
     'SELECT ov.id AS ordine_id, ov.numero_ordine, ov.data_ordine, ov.stato, ' +
     'c.id AS cliente_id, c.ragione_sociale, ' +
@@ -324,8 +403,11 @@ const
     'JOIN clienti c ON c.id = ov.cliente_id ' +
     'JOIN ordini_vendita_righe ovr ON ovr.ordine_vendita_id = ov.id ' +
     'JOIN anagrafiche_prodotti_finiti apf ON apf.id = ovr.prodotto_finito_id ';
-  // LIMIT sempre in coda, con o senza filtri, per non dare al modello un numero arbitrario
-  // di righe.
+  // Limite righe applicato SEMPRE in coda alla query, sia nel ramo
+  // "nessun filtro" (dove e' l'unico vincolo, insieme a stato <>
+  // annullato) sia nel ramo con filtri (dove si aggiunge alla WHERE
+  // dinamica): evita di restituire al modello un numero di righe
+  // arbitrariamente grande in entrambi i casi.
   MAX_RIGHE_QUERY = 100;
 var
   LWhere: TList<string>;
@@ -346,8 +428,9 @@ begin
   try
     if ANessunFiltro then
     begin
-      // Nessun filtro: niente WHERE dinamica, solo l'esclusione degli annullati e il LIMIT.
-      // Nessun parametro da legare.
+      // Richiesta priva di qualunque filtro: niente WHERE dinamica, solo
+      // l'esclusione sempre valida degli annullati (vedi commento sotto)
+      // e il LIMIT. Nessun parametro posizionale da legare.
       LSQL := SQL_BASE +
         'WHERE ov.stato <> ''annullato'' ' +
         'ORDER BY ov.data_ordine DESC ' +
@@ -357,12 +440,19 @@ begin
     end
     else
     begin
-      // Un ordine annullato non e' una vendita: escluso sempre. Interrogare gli annullati
-      // sara' un tool o parametro a parte, non una variante di get_list_vendite.
+      // Un ordine annullato non e' una vendita: escluso SEMPRE (non e' un
+      // filtro opzionale - vedi discussione di progetto). Se in futuro
+      // servisse interrogare esplicitamente gli annullati (es. "quali
+      // ordini sono stati annullati questo mese"), sara' un tool/parametro
+      // a parte, non una variante di get_list_vendite.
       LWhere.Add('ov.stato <> ''annullato''');
 
-      // Il periodo qui e' sempre applicato: InterrogaVendite ha gia' risolto il default
-      // "ultimo mese" (ANessunFiltro = False implica almeno un filtro).
+      // Il periodo e' sempre applicato in questo ramo: a differenza di
+      // cliente/prodotto, non e' mai "assente" a questo punto
+      // (InterrogaVendite ha gia' risolto il default "ultimo mese" prima
+      // di chiamare questo metodo, dato che ANessunFiltro = False implica
+      // che almeno un filtro - non necessariamente il periodo - e'
+      // presente).
       LWhere.Add('ov.data_ordine BETWEEN :data_inizio AND :data_fine');
       LParams.Add(ADataInizio);
       LParams.Add(ADataFine);
@@ -445,10 +535,19 @@ begin
   AProblemiCliente := [];
   AProblemiProdotto := [];
 
-  // Richiesta senza alcun filtro (cliente, prodotto, periodo), calcolato prima del default
-  // "ultimo mese": dopo, le date non sarebbero piu' 0 e il flag risulterebbe sempre False.
-  // Se True, EseguiQueryVendite non usa WHERE dinamica ne' periodo ("ultime N vendite").
-  // AClienteIdEsatto/AProdottoIdEsatto contano come filtri, come gli array di nomi.
+  // Richiesta priva di QUALUNQUE filtro (ne' cliente, ne' prodotto, ne'
+  // periodo): calcolato PRIMA di applicare il default "ultimo mese" al
+  // periodo, perche' e' proprio la presenza/assenza del periodo esplicito
+  // a determinare il flag (se lo calcolassimo dopo il passo 2, ADataFine/
+  // ADataInizio non sarebbero piu' 0 e il flag risulterebbe sempre
+  // False). Guida due scelte in EseguiQueryVendite: se True, niente WHERE
+  // dinamica e niente vincolo di periodo, solo "ultime N vendite"; se
+  // False, resta il comportamento attuale (vedi passo 2 e 3 sotto).
+  //
+  // AClienteIdEsatto/AProdottoIdEsatto contano come filtro presente
+  // esattamente come i rispettivi array di nomi: sono due modi diversi
+  // di esprimere lo stesso vincolo (per testo o per id gia' risolto), non
+  // un filtro ulteriore rispetto a loro.
   LNessunFiltro :=
     (Length(ANomiCliente) = 0) and (AClienteIdEsatto = 0) and
     (Length(ANomiProdotto) = 0) and (AProdottoIdEsatto = 0) and
@@ -457,16 +556,24 @@ begin
 
   LClienteIDs := TList<Integer>.Create;
   LProdottoIDs := TList<Integer>.Create;
-  // Questi non possiedono gli oggetti contenuti: i risolti si liberano subito (l'ID e'
-  // estratto), i problematici passano al chiamante tramite
-  // AProblemiCliente/AProblemiProdotto. Si libera solo il contenitore, mai gli oggetti
-  // (vedi finally).
+  // Questi due NON possiedono gli oggetti che contengono (non sono
+  // TObjectList): i risolti con successo vengono liberati subito sotto
+  // (l'ID e' gia' stato estratto, non servono oltre); i problematici
+  // restano vivi e la loro proprieta' passa al chiamante tramite
+  // AProblemiCliente/AProblemiProdotto - per questo qui liberiamo solo il
+  // CONTENITORE, mai gli oggetti al suo interno (vedi finally in fondo).
   LProblemiCliente := TList<TRisoluzioneCliente>.Create;
   LProblemiProdotto := TList<TRisoluzioneProdotto>.Create;
   try
-    // 1) Risoluzione. Se c'e' l'id esatto ha la precedenza e si salta
-    // RisolviCliente/RisolviProdotto: elimina l'ambiguita' per costruzione, anche nel caso
-    // raro di omonimia perfetta fra due anagrafiche.
+    // --- 1) Risoluzione di ogni filtro testuale (o dell'id esatto) ----
+    //
+    // Se l'id esatto e' stato fornito, ha la precedenza: si usa
+    // direttamente, senza passare da RisolviCliente/RisolviProdotto. E'
+    // la via che elimina l'ambiguita' per costruzione invece di
+    // limitarsi a ridurla - vedi il commento sull'id esatto sopra la
+    // dichiarazione di questo metodo per il caso (raro ma reale) in cui
+    // anche un match testuale ESATTO trova piu' di un candidato
+    // (omonimia perfetta fra due anagrafiche).
     if AClienteIdEsatto > 0 then
       LClienteIDs.Add(AClienteIdEsatto)
     else
@@ -497,9 +604,11 @@ begin
           LProblemiProdotto.Add(LRisoluzioneP);
       end;
 
-    // Se un solo filtro e' ambiguo o non trovato l'intera richiesta si ferma e non parte
-    // nessuna query. Si riportano tutti i problemi insieme, cosi' l'utente li risolve in un
-    // turno solo.
+    // Se anche un solo filtro e' ambiguo/non trovato, l'INTERA richiesta
+    // si ferma: nessuna query di vendite viene eseguita. Riportiamo TUTTI
+    // i problemi insieme (non solo il primo), cosi' chi chiama puo'
+    // chiederli all'utente in un colpo solo invece che uno alla volta a
+    // ogni turno di conversazione.
     if (LProblemiCliente.Count > 0) or (LProblemiProdotto.Count > 0) then
     begin
       AProblemiCliente := LProblemiCliente.ToArray;
@@ -507,9 +616,16 @@ begin
       Exit; // Result resta nil
     end;
 
-    // 2) Periodo: default "ultimo mese" se non specificato (0 = non valorizzato). Solo se
-    // esiste almeno un filtro: senza filtri non si restringe all'ultimo mese un risultato
-    // che l'utente non ha vincolato (EseguiQueryVendite ignora comunque le date).
+    // --- 2) Periodo: default "ultimo mese" se non specificato ---------
+    // Sentinella 0 = non valorizzato dal chiamante (stesso principio
+    // "parametro opzionale con sentinella" gia' usato altrove nel
+    // progetto, es. TServizioRitiroRichiamo.EseguiRitiro).
+    //
+    // Applicato SOLO quando esiste almeno un filtro (LNessunFiltro =
+    // False): con una richiesta completamente priva di filtri non ha
+    // senso restringere implicitamente all'ultimo mese un risultato che
+    // l'utente non ha vincolato a nessun periodo - vedi EseguiQueryVendite,
+    // che in quel caso ignora comunque data_inizio/data_fine.
     if not LNessunFiltro then
     begin
       if ADataFine = 0 then
@@ -518,9 +634,11 @@ begin
         ADataInizio := IncMonth(ADataFine, -1);
     end;
 
-    // 3) Query. Nessun filtro: ultime MAX_RIGHE_QUERY vendite, senza WHERE dinamica ne'
-    // periodo. Almeno un filtro: WHERE dinamica su cliente/prodotto/periodo, con lo stesso
-    // LIMIT.
+    // --- 3) Query -------------------------------------------------------
+    // Nessun filtro -> ultime MAX_RIGHE_QUERY vendite, senza WHERE
+    // dinamica ne' vincolo di periodo. Almeno un filtro -> tutti i filtri
+    // risolti (cliente/prodotto/periodo) diventano una WHERE dinamica,
+    // con lo stesso LIMIT in coda (vedi EseguiQueryVendite).
     Result := EseguiQueryVendite(LClienteIDs.ToArray, LProdottoIDs.ToArray,
       ADataInizio, ADataFine, LNessunFiltro);
   finally

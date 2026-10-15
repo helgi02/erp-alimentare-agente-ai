@@ -9,10 +9,15 @@ uses
   DbU;
 
 type
-  // Riga di ordine di acquisto: una materia prima ordinata, con quantita', unita' e prezzo
-  // negoziato (ordini_fornitori_righe). Il prezzo puo' differire dal PrezzoUnitario della
-  // riga DDT di entrata; non c'e' una FK ordine-riga -> DDT-riga, la corrispondenza e' di
-  // processo.
+  // Rappresenta una riga di un ordine di acquisto: una materia prima
+  // ordinata a un fornitore, con quantita', unita' di misura e prezzo
+  // concordato (tabella ordini_fornitori_righe). E' il "preventivo": il
+  // prezzo qui e' quello negoziato in fase d'ordine, e puo' differire
+  // dal PrezzoUnitario poi effettivamente registrato sulla riga del DDT
+  // di entrata corrispondente (TDDTEntrataRiga) quando la merce arriva
+  // — lo schema non forza un collegamento diretto ordine-riga -> DDT-riga,
+  // la corrispondenza si fa a livello di processo (stesso
+  // fornitore/materia prima/periodo).
   TOrdineFornitoreRiga = class
   private
     FID: Integer;
@@ -35,9 +40,12 @@ type
     property UnitaMisura: string read FUnitaMisura write FUnitaMisura;
     property PrezzoUnitario: Currency read FPrezzoUnitario write FPrezzoUnitario;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ordini_fornitori_righe_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TOrdineFornitoreRiga;
     class function GetAll: TObjectList<TOrdineFornitoreRiga>;
     class function GetByOrdineFornitore(AOrdineFornitoreID: Integer): TObjectList<TOrdineFornitoreRiga>;
@@ -58,6 +66,8 @@ const
     'SELECT id, ordine_fornitore_id, materia_prima_id, quantita, ' +
     'unita_misura, prezzo_unitario, creato_il, aggiornato_il ' +
     'FROM ordini_fornitori_righe ';
+
+{ TOrdineFornitoreRiga }
 
 constructor TOrdineFornitoreRiga.Create;
 begin
@@ -142,6 +152,8 @@ end;
 
 class function TOrdineFornitoreRiga.Delete(AID: Integer): Boolean;
 begin
+  // Nessun'altra tabella referenzia ordini_fornitori_righe come FK: nodo
+  // foglia nello schema.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ordini_fornitori_righe WHERE id = :id', [AID]);
 end;
@@ -150,7 +162,8 @@ function TOrdineFornitoreRiga.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il/aggiornato_il: DEFAULT del database.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ordini_fornitori_righe ' +
     '(ordine_fornitore_id, materia_prima_id, quantita, unita_misura, prezzo_unitario) ' +
@@ -171,7 +184,9 @@ function TOrdineFornitoreRiga.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ordini_fornitori_righe_aggiornato_il lo valorizza
+  // automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ordini_fornitori_righe SET ordine_fornitore_id = :ordine_fornitore_id, ' +
     'materia_prima_id = :materia_prima_id, quantita = :quantita, ' +
@@ -218,7 +233,8 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<Integer>('ordine_fornitore_id', LValInt) then
     FOrdineFornitoreID := LValInt;
   if AJSON.TryGetValue<Integer>('materia_prima_id', LValInt) then
@@ -226,7 +242,8 @@ begin
   if AJSON.TryGetValue<string>('unita_misura', LValStr) then
     FUnitaMisura := LValStr;
 
-  // Decimali letti come TJSONNumber, per non perdere precisione.
+  // Campi numerici decimali: letti come TJSONNumber per preservarne la
+  // precisione (evitando conversioni intermedie a Double)
   if AJSON.TryGetValue<TJSONValue>('quantita', LValNum) and (LValNum is TJSONNumber) then
     FQuantita := TJSONNumber(LValNum).AsDouble;
   if AJSON.TryGetValue<TJSONValue>('prezzo_unitario', LValNum) and (LValNum is TJSONNumber) then

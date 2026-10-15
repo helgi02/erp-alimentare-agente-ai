@@ -20,12 +20,17 @@ uses
   uModelCliente;
 
 type
-  // Lotto di materia prima in input all'analisi di impatto (RaccogliDatiPerMateriaPrima).
-  // Il suo DDT di acquisto e' incluso per la tracciabilita' "a monte" (Reg. CE 178/2002,
-  // art. 18, "one step back") e per i documenti di compliance; non serve a raggiungere i
-  // lotti di prodotto finito (quel collegamento passa da consumi_produzione_*).
-  // DDTEntrataID = 0 e' una sentinella "DDT non determinabile", che non dovrebbe capitare
-  // (ddt_entrata_riga_id e' NOT NULL), gestita per robustezza.
+  // Lotto di materia prima passato in INPUT all'analisi di impatto (step 1
+  // della risalita filiera, vedi TServizioRitiroRichiamo.RaccogliDatiPerMateriaPrima):
+  // il suo DDT di acquisto, se presente, e' incluso per la tracciabilita'
+  // "a monte" richiesta dal Reg. CE 178/2002 (art. 18, "one step back") -
+  // non serve per raggiungere i lotti di prodotto finito (quel collegamento
+  // passa da consumi_produzione_*, non dal DDT di acquisto), ma e' un dato
+  // utile da avere gia' pronto per la compilazione dei documenti di
+  // compliance (scenario successivo, non ancora implementato). DDTEntrataID
+  // = 0 e' una sentinella "DDT non determinabile" che in pratica non
+  // dovrebbe mai verificarsi (ddt_entrata_riga_id e' NOT NULL a livello di
+  // schema), gestita comunque per robustezza contro dati anomali.
   TLottoMateriaPrimaOrigine = class
   public
     LottoMateriaPrimaID: Integer;
@@ -37,21 +42,48 @@ type
     DDTFornitoreID: Integer;
   end;
 
-  // Lotto di prodotto finito raggiunto, con i lotti di materia prima di origine (fra quelli
-  // in input) che l'hanno raggiunto. Possono essere piu' di uno: serve a non perdere, nei
-  // documenti di compliance, quale lotto non conforme ha raggiunto quale prodotto.
+  // Dati LEGGIBILI di un lotto di prodotto finito raggiunto (codice, prodotto,
+  // giacenza): servono a chi racconta l'esito all'utente. Con i soli id
+  // numerici il riepilogo poteva citare "lotto 13" e non dire quali lotti
+  // sono ancora in magazzino. Record (non classe): si copia nell'esito senza
+  // problemi di proprieta'.
+  TDettaglioLottoProdottoFinito = record
+    LottoProdottoFinitoID: Integer;
+    CodiceLotto: string;
+    CodiceProdotto: string;
+    DenominazioneProdotto: string;
+    QuantitaDisponibile: Currency;   // 0 = esaurito / tutto gia' uscito
+    UnitaMisura: string;
+    DataScadenza: TDateTime;
+  end;
+
+  // Un lotto di prodotto finito raggiunto dalla risalita, con l'elenco dei
+  // lotti di materia prima DI ORIGINE (tra quelli passati in input a
+  // RaccogliDatiPerMateriaPrima) che hanno contribuito a raggiungerlo. Non
+  // e' detto sia uno solo: se la stessa chiamata analizza piu' lotti di
+  // materia prima "andati a male" insieme, e un prodotto finito li ha
+  // consumati entrambi, questo campo lo riporta esplicitamente - serve a
+  // non perdere, nei documenti di compliance, quale lotto non conforme ha
+  // raggiunto quale prodotto.
   TLottoProdottoFinitoImpattato = class
   public
     LottoProdottoFinitoID: Integer;
     ProdottoFinitoID: Integer;
     CodiceLotto: string;
+    Dettaglio: TDettaglioLottoProdottoFinito;
     LottiMateriaPrimaOrigineIDs: TArray<Integer>;
   end;
 
-  // Dati intermedi di RaccogliDatiPerMateriaPrima: per ogni lotto di materia prima, il DDT
-  // di acquisto e i lotti di prodotto finito raggiunti a valle col lotto di origine che li
-  // ha raggiunti. Uso interno di ApriRitiro, mai restituito a un tool. Vendite e DDT di
-  // uscita dei clienti coinvolti sono un passo separato (TrovaClientiLottoProdottoFinito).
+  // Dati intermedi raccolti da RaccogliDatiPerMateriaPrima (privato, vedi
+  // il relativo commento in TServizioRitiroRichiamo): per ogni lotto di
+  // materia prima passato, i suoi dati di tracciabilita' a monte (DDT di
+  // acquisto), e l'elenco dei lotti di prodotto finito raggiunti a valle
+  // con il collegamento a quale lotto di origine li ha raggiunti. Uso
+  // interno: costruito e consumato da ApriRitiro nella stessa chiamata,
+  // mai restituito a un tool. Il passo successivo (vendite/DDT di uscita
+  // dei clienti coinvolti, per ciascun lotto di prodotto finito qui
+  // trovato) e' un metodo/tool separato, deliberatamente non incluso qui
+  // - vedi la discussione su un futuro TrovaClientiLottoProdottoFinito.
   TDatiMateriaPrima = class
   public
     LottiOrigine: TObjectList<TLottoMateriaPrimaOrigine>;
@@ -61,22 +93,37 @@ type
     destructor Destroy; override;
   end;
 
-  // Una non conformita' aperta da ApriRitiro, una per lotto di materia prima:
-  // non_conformita.lotto_materia_prima_id e' una colonna singola, quindi "ritiro su piu'
-  // lotti" significa piu' non conformita'. LottiProdottoFinitoIDs sono solo quelli
-  // raggiunti da questo lotto (filtrati con LottiMateriaPrimaOrigineIDs), non tutti quelli
-  // dell'analisi.
+  // Una singola non conformita' aperta da TServizioRitiroRichiamo.ApriRitiro:
+  // una riga per lotto di materia prima (vedi discussione di progetto -
+  // non_conformita.lotto_materia_prima_id e' una colonna singola, non un
+  // array, quindi "aprire un ritiro su piu' lotti insieme" in pratica vuol
+  // dire aprire piu' non conformita', una per lotto, non una sola con piu'
+  // riferimenti). LottiProdottoFinitoIDs e' il sottoinsieme di
+  // TDatiMateriaPrima.LottiProdottoFinitoImpattati che
+  // QUESTO lotto specifico ha raggiunto (filtrato tramite
+  // TLottoProdottoFinitoImpattato.LottiMateriaPrimaOrigineIDs) - non tutti
+  // i lotti di prodotto finito trovati dall'analisi complessiva, solo
+  // quelli di competenza di questa riga.
   TNonConformitaAperta = class
   public
     NonConformitaID: Integer;
     CodiceNC: string;
     LottoMateriaPrimaID: Integer;
+    // Codice testuale del lotto di materia prima (quello che conosce l'utente).
+    CodiceLottoMateriaPrima: string;
     LottiProdottoFinitoIDs: TArray<Integer>;
+    // Stessi lotti di LottiProdottoFinitoIDs (stesso ordine) con i dati
+    // leggibili: codice lotto, prodotto, giacenza.
+    LottiProdottoFinito: TArray<TDettaglioLottoProdottoFinito>;
 
-    // Vera anche con RichiedeModelloRichiamoConsumatore sconosciuto: la Scheda di Notifica
-    // OSA dipende solo dall'aver raggiunto almeno un lotto di prodotto finito.
-    // L'esposizione clienti (vendite/DDT di uscita) e' TrovaClientiLottoProdottoFinito,
-    // richiamabile dopo con LottiProdottoFinitoIDs senza rifare la risalita.
+    // Vera anche con RichiedeModelloRichiamoConsumatore ancora sconosciuto
+    // a questo punto: la Scheda di Notifica OSA dipende solo dall'aver
+    // raggiunto almeno un lotto di prodotto finito (vedi il commento
+    // sopra), non
+    // dall'esposizione clienti - quella verifica (vendite/DDT di uscita)
+    // e' TrovaClientiLottoProdottoFinito, piu' sotto (il "Tool B" discusso),
+    // che Result.LottiProdottoFinitoIDs permette di richiamare in un
+    // secondo momento senza dover rifare la risalita di filiera.
     RichiedeSchedaNotificaOSA: Boolean;
   end;
 
@@ -88,9 +135,10 @@ type
     destructor Destroy; override;
   end;
 
-  // Una spedizione (DDT di uscita) di una riga ordine per un lotto coinvolto. Elenco
-  // perche' una riga puo' essere evasa con piu' DDT
-  // (TDDTUscitaRiga.GetByOrdineVenditaRiga).
+  // Una spedizione (DDT di uscita) collegata a una riga ordine per un
+  // lotto di prodotto finito coinvolto in un ritiro/richiamo. Elenco, non
+  // singolo valore: una riga ordine puo' in teoria essere evasa con piu'
+  // DDT (spedizioni parziali) - vedi TDDTUscitaRiga.GetByOrdineVenditaRiga.
   TSpedizioneRiga = class
   public
     DDTUscitaID: Integer;
@@ -99,15 +147,19 @@ type
     QuantitaSpedita: Currency;
   end;
 
-  // Riga ordine che referenzia il lotto, con le spedizioni gia' partite. Solo riferimenti
-  // (ClienteID, non l'anagrafica, che si recupera con un tool dedicato): non duplica
-  // get_list_vendite, che non filtra per lotto.
+  // Una riga ordine di vendita che referenzia il lotto di prodotto finito
+  // in oggetto, con le eventuali spedizioni (DDT di uscita) gia' partite.
+  // Solo riferimenti (ClienteID, non l'anagrafica): l'anagrafica cliente
+  // si recupera altrove con un tool dedicato - vedi la discussione di
+  // progetto sul perche' questo tool resta deliberatamente minimale (non
+  // duplica get_list_vendite, che non sa filtrare per lotto).
   TEsposizioneOrdine = class
   public
     OrdineVenditaRigaID: Integer;
     OrdineVenditaID: Integer;
     NumeroOrdine: string;
     ClienteID: Integer;
+    RagioneSocialeCliente: string;
     Quantita: Currency;
     Spedizioni: TObjectList<TSpedizioneRiga>;
 
@@ -115,17 +167,23 @@ type
     destructor Destroy; override;
   end;
 
-  // Esposizioni (ordini con eventuali spedizioni) di un lotto di prodotto finito.
+  // Tutte le esposizioni (ordini, con le eventuali spedizioni) trovate per
+  // UN lotto di prodotto finito.
   TLottoConClienti = class
   public
     LottoProdottoFinitoID: Integer;
+    CodiceLotto: string;
+    CodiceProdotto: string;
+    DenominazioneProdotto: string;
     Esposizioni: TObjectList<TEsposizioneOrdine>;
 
     constructor Create;
     destructor Destroy; override;
   end;
 
-  // Esito di TrovaClientiLottoProdottoFinito: un TLottoConClienti per ogni lotto in input.
+  // Esito complessivo di TrovaClientiLottoProdottoFinito: un
+  // TLottoConClienti per ciascun lotto di prodotto finito passato in
+  // input.
   TEsitoClientiPerLotti = class
   public
     Lotti: TObjectList<TLottoConClienti>;
@@ -134,15 +192,25 @@ type
     destructor Destroy; override;
   end;
 
-  // Servizio dello scenario 1 (ritiro/richiamo). Non modifica mai la giacenza: solo
-  // lettura/risalita piu' l'apertura della non conformita'. A differenza di
-  // TServizioGiacenza non serve una transazione multi-step: ogni operazione tocca una
-  // tabella alla volta.
-  // Comunicazione per UN cliente e UNO dei due casi (TrovaComunicazioniClienti):
-  // MerceSpedita = True, lotti gia' spediti (richiamo); False, lotti in ordini non ancora
-  // spediti (ritiro). Un cliente in entrambi i casi ha due comunicazioni (ogni email ha un
-  // solo scopo). Righe = una riga di testo pronta per ogni riga d'ordine (prodotto, lotto,
-  // quantita', ordine, DDT).
+  // Layer Services per lo scenario 1 del tirocinio (ritiro/richiamo
+  // prodotti non conformi). Dipende da TServizioGiacenza solo
+  // concettualmente (entrambi orchestrano gli stessi model di lotti e
+  // consumi); questa classe in particolare non modifica mai la
+  // giacenza — e' un servizio di sola LETTURA/risalita piu' l'apertura
+  // della non conformita', mai un decremento di magazzino. Per questo,
+  // a differenza di TServizioGiacenza, qui non serve nessuna
+  // transazione multi-step: ogni operazione tocca una tabella alla
+  // volta (SELECT di risalita, oppure un singolo Insert su
+  // non_conformita).
+  // Una comunicazione da mandare a UN cliente per UNO dei due casi del
+  // ritiro/richiamo (vedi TrovaComunicazioniClienti):
+  //   MerceSpedita = True   i lotti non conformi gli sono gia' stati
+  //                         spediti (richiamo);
+  //   MerceSpedita = False  i lotti sono in suoi ordini non ancora spediti
+  //                         (ritiro).
+  // Un cliente che ricade in entrambi i casi ha DUE comunicazioni: ogni
+  // email ha un solo scopo. Righe = una riga di testo gia' pronta per ogni
+  // riga d'ordine coinvolta (prodotto, lotto, quantita', ordine, DDT).
   TComunicazioneCliente = class
   public
     ClienteID: Integer;
@@ -156,57 +224,81 @@ type
 
   TServizioRitiroRichiamo = class
   private
-    // Esplorazione ricorsiva a valle di un lotto di semilavorato coinvolto: i prodotti
-    // finiti che l'hanno consumato direttamente e i semilavorati "genitori" che l'hanno
-    // consumato come componente (distinta multi-livello), esplorati a loro volta.
+    // Esplorazione ricorsiva a valle di UN lotto di semilavorato gia'
+    // identificato come coinvolto (contiene, direttamente o
+    // indirettamente, il componente non conforme): trova sia i prodotti
+    // finiti che lo hanno consumato direttamente sia altri semilavorati
+    // "genitori" che lo hanno consumato come componente (distinta base
+    // multi-livello), esplorando questi ultimi a loro volta.
     class procedure EsploraLottoSemilavorato(ALottoSemilavoratoID: Integer;
       AProdottiFinitiTrovati, ASemilavoratiVisitati: TList<Integer>);
 
-    // Raccoglie per uno o piu' lotti di materia prima non conformi i dati per ApriRitiro:
-    // risale la filiera (RisaliCatenaConsumoDaMateriaPrima), recupera il DDT di acquisto di
-    // ogni lotto di origine e collega ogni lotto di prodotto finito raggiunto al lotto di
-    // origine. Raccolta meccanica, senza valutazioni di merito (gravita', urgenza).
-    // Privato: serve solo ad ApriRitiro.
+    // Raccoglie, per uno o piu' lotti di materia prima non conformi, i
+    // dati che servono ad ApriRitiro per scrivere: risale la filiera
+    // (riusando RisaliCatenaConsumoDaMateriaPrima), recupera il DDT di
+    // acquisto di ciascun lotto di origine, e collega ogni lotto di
+    // prodotto finito raggiunto al lotto di origine che lo ha raggiunto.
+    // Nessuna valutazione di merito qui dentro (niente gravita', urgenza,
+    // costi): e' un passo meccanico di raccolta/arricchimento dati, non
+    // un'"analisi" in senso decisionale - da qui il nome, deciso apposta
+    // per non promettere piu' di quello che la funzione fa davvero.
+    // PRIVATE: non ha senso richiamarlo isolatamente, serve solo ad
+    // ApriRitiro - nessun tool lo invoca da solo.
     class function RaccogliDatiPerMateriaPrima(
       const ALottiMateriaPrimaID: TArray<Integer>): TDatiMateriaPrima;
   public
-    // Risalita da un lotto di materia prima non conforme: gli id di tutti i lotti di
-    // prodotto finito potenzialmente coinvolti (diretti o attraverso uno o piu' livelli di
-    // semilavorato).
+    // Risalita di filiera a partire da un lotto di MATERIA PRIMA non
+    // conforme: restituisce gli id di tutti i lotti di prodotto finito
+    // potenzialmente coinvolti (diretti, o raggiunti attraverso uno o
+    // piu' livelli di semilavorato).
     class function RisaliCatenaConsumoDaMateriaPrima(
       ALottoMateriaPrimaID: Integer): TArray<Integer>;
 
-    // Come sopra, quando il lotto non conforme e' un semilavorato (la NC puo' nascere a
-    // qualunque livello, CHECK OR e non XOR su non_conformita).
+    // Come sopra, ma quando il lotto non conforme e' gia' un
+    // SEMILAVORATO (la NC puo' nascere a qualunque dei tre livelli, vedi
+    // il CHECK "OR" — non XOR — su non_conformita).
     class function RisaliCatenaConsumoDaSemilavorato(
       ALottoSemilavoratoID: Integer): TArray<Integer>;
 
-    // Scrittura: apre una non conformita' per ogni lotto di materia prima, riusando
-    // RaccogliDatiPerMateriaPrima. ACodiceNCBase e' usato com'e' con un solo lotto; con
-    // piu' lotti ogni riga ha il suffisso "-1", "-2", ... nell'ordine di elaborazione: un
-    // solo codice dal modello, suffissato dal codice, e' piu' robusto di un array di codici
-    // da un modello 9B, che rischierebbe duplicati.
+    // Passo di SCRITTURA: apre una non conformita' per ciascuno dei lotti
+    // di materia prima passati, riusando internamente
+    // RaccogliDatiPerMateriaPrima (nessuna query di risalita duplicata).
+    // ACodiceNCBase e' usato COSI' COM'E' se e' stato passato un solo
+    // lotto; se i lotti sono piu' di uno, ogni riga prende un codice
+    // derivato con suffisso "-1", "-2", ... nell'ordine di elaborazione
+    // (deciso in fase di progetto: un solo codice fornito dal modello,
+    // suffissato automaticamente, invece di chiedere al modello un array
+    // di codici gia' pronti - piu' robusto per un modello locale 9B, che
+    // altrimenti rischierebbe di generarne di duplicati).
     class function ApriRitiro(const ACodiceNCBase, AMotivo: string;
       const ALottiMateriaPrimaID: TArray<Integer>): TEsitoAperturaRitiro;
 
-    // Tool "B": per uno o piu' lotti di prodotto finito (tipicamente l'esito di
-    // ApriRitiro), il dettaglio riga per riga degli ordini che li referenziano e delle
-    // spedizioni (DDT di uscita) gia' partite. Sola lettura. Pubblico, a differenza di
-    // RaccogliDatiPerMateriaPrima: richiamabile anche da solo.
+    // Tool "B": dati uno o piu' lotti di prodotto finito (tipicamente
+    // l'esito di ApriRitiro), restituisce per ciascuno il dettaglio -
+    // riga per riga, non solo un aggregato - degli ordini di vendita che
+    // lo referenziano e, se gia' partite, delle spedizioni (DDT di
+    // uscita) collegate. Pura lettura. A differenza di
+    // RaccogliDatiPerMateriaPrima e' PUBLIC: e' pensato per essere
+    // richiamabile anche da solo, non solo in coda ad ApriRitiro (vedi
+    // discussione di progetto).
     class function TrovaClientiLottoProdottoFinito(
       const ALottiProdottoFinitoID: TArray<Integer>): TEsitoClientiPerLotti;
 
-    // I clienti da avvisare per i lotti indicati, divisi nei due casi (spedita / non
-    // spedita) e con i dati leggibili per l'email (prodotto, codice lotto, scadenza,
-    // cliente). Parte da TrovaClientiLottoProdottoFinito (stessi controlli sugli id).
-    // Esclude gli ordini annullati. Sola lettura; lista vuota = nessun cliente coinvolto
-    // (caso normale). Il risultato e' del chiamante.
+    // I clienti da avvisare per i lotti di prodotto finito indicati, gia'
+    // divisi nei due casi (merce spedita / non spedita) e con i dati che
+    // servono al testo dell'email. Parte da TrovaClientiLottoProdottoFinito
+    // (stessi controlli sugli id) e aggiunge i dati LEGGIBILI: prodotto,
+    // codice lotto, scadenza, cliente. Gli ordini annullati sono esclusi.
+    // Sola lettura. Il risultato e' del chiamante; lista vuota = nessun
+    // cliente coinvolto (caso normale).
     class function TrovaComunicazioniClienti(
       const ALottiProdottoFinitoID: TArray<Integer>): TObjectList<TComunicazioneCliente>;
 
   end;
 
 implementation
+
+{ TServizioRitiroRichiamo }
 
 class procedure TServizioRitiroRichiamo.EsploraLottoSemilavorato(
   ALottoSemilavoratoID: Integer; AProdottiFinitiTrovati, ASemilavoratiVisitati: TList<Integer>);
@@ -216,14 +308,19 @@ var
   LConsumo1: TConsumoProduzioneProdottoFinito;
   LConsumo2: TConsumoProduzioneSemilavorato;
 begin
-  // Guardia anti-duplicazione: un lotto di semilavorato puo' essere raggiunto da piu'
-  // percorsi. Una distinta non dovrebbe avere cicli, ma la guardia protegge da dati
-  // anomali.
+  // Guardia anti-duplicazione: lo stesso lotto di semilavorato puo'
+  // essere raggiunto da piu' percorsi (es. usato in due semilavorati
+  // "genitori" diversi, o direttamente in piu' prodotti finiti); senza
+  // questa guardia verrebbe esplorato piu' volte inutilmente. Una
+  // distinta base di produzione non dovrebbe mai avere cicli (un lotto
+  // non puo' consumare se stesso), ma la guardia protegge comunque da
+  // un eventuale dato anomalo.
   if ASemilavoratiVisitati.Contains(ALottoSemilavoratoID) then
     Exit;
   ASemilavoratiVisitati.Add(ALottoSemilavoratoID);
 
-  // Chi ha consumato questo lotto per un prodotto finito: punto d'arrivo del ramo.
+  // Chi ha consumato questo lotto per fare un prodotto finito: punto
+  // d'arrivo di questo ramo della risalita.
   LConsumiInProdottoFinito :=
     TConsumoProduzioneProdottoFinito.GetByLottoSemilavorato(ALottoSemilavoratoID);
   try
@@ -234,8 +331,9 @@ begin
     LConsumiInProdottoFinito.Free;
   end;
 
-  // Chi l'ha consumato come componente di un altro semilavorato: un livello di distinta in
-  // piu', da esplorare ricorsivamente.
+  // Chi ha consumato questo lotto come componente "figlio" di un altro
+  // semilavorato: un ulteriore livello di distinta base, da esplorare
+  // ricorsivamente prima di fermarsi.
   LConsumiInSemilavorato :=
     TConsumoProduzioneSemilavorato.GetByLottoSemilavoratoFiglio(ALottoSemilavoratoID);
   try
@@ -259,8 +357,9 @@ begin
   LProdottiFinitiTrovati := TList<Integer>.Create;
   LSemilavoratiVisitati := TList<Integer>.Create;
   try
-    // Consumo diretto della materia prima in un prodotto finito, senza semilavorato
-    // intermedio.
+    // Passo 1: chi ha consumato DIRETTAMENTE questo lotto di materia
+    // prima per fare un prodotto finito, senza passare da un
+    // semilavorato intermedio.
     LConsumiDiretti1 := TConsumoProduzioneProdottoFinito.GetByLottoMateriaPrima(ALottoMateriaPrimaID);
     try
       for LConsumo1 in LConsumiDiretti1 do
@@ -270,7 +369,8 @@ begin
       LConsumiDiretti1.Free;
     end;
 
-    // Consumo in un semilavorato: da ciascuno si esplora a valle.
+    // Passo 2: chi ha consumato questo lotto di materia prima per fare
+    // un semilavorato — da ciascuno si esplora ricorsivamente a valle.
     LConsumiDiretti2 := TConsumoProduzioneSemilavorato.GetByLottoMateriaPrima(ALottoMateriaPrimaID);
     try
       for LConsumo2 in LConsumiDiretti2 do
@@ -303,6 +403,8 @@ begin
   end;
 end;
 
+{ TDatiMateriaPrima }
+
 constructor TDatiMateriaPrima.Create;
 begin
   inherited Create;
@@ -321,10 +423,12 @@ class function TServizioRitiroRichiamo.RaccogliDatiPerMateriaPrima(
   const ALottiMateriaPrimaID: TArray<Integer>): TDatiMateriaPrima;
 var
   LIDsProcessati: TList<Integer>;
-  // Indice temporaneo lotto_prodotto_finito_id -> oggetto creato. Non possiede gli oggetti
-  // (TDictionary, non TObjectDictionary): la proprieta' passa a
-  // Result.LottiProdottoFinitoImpattati alla creazione, quindi liberare la mappa non libera
-  // gli oggetti.
+  // Indice temporaneo lotto_prodotto_finito_id -> oggetto gia' creato: NON
+  // possiede gli oggetti (TDictionary semplice, non TObjectDictionary) -
+  // la proprieta' passa a Result.LottiProdottoFinitoImpattati nel momento
+  // stesso in cui l'oggetto viene creato (vedi sotto), quindi liberare
+  // questa mappa alla fine libera solo la struttura della mappa, mai gli
+  // oggetti che indicizza.
   LMappaImpattati: TDictionary<Integer, TLottoProdottoFinitoImpattato>;
   LLottoOrigineID: Integer;
   LLottoMP: TLottoMateriaPrima;
@@ -335,6 +439,7 @@ var
   LProdottoFinitoID: Integer;
   LImpattato: TLottoProdottoFinitoImpattato;
   LLottoPF: TLottoProdottoFinito;
+  LProdotto: TProdottoFinito;
 begin
   if Length(ALottiMateriaPrimaID) = 0 then
     raise Exception.Create(
@@ -347,8 +452,9 @@ begin
   try
     for LLottoOrigineID in ALottiMateriaPrimaID do
     begin
-      // Anti-duplicati: un id ripetuto in input (anche per errore del modello) si elabora
-      // una volta.
+      // Guardia anti-duplicati: se lo stesso id compare piu' volte in
+      // input (es. ripetuto per errore dal modello), lo si elabora una
+      // sola volta - stesso principio gia' usato in EsploraLottoSemilavorato.
       if LIDsProcessati.Contains(LLottoOrigineID) then
         Continue;
       LIDsProcessati.Add(LLottoOrigineID);
@@ -364,8 +470,10 @@ begin
         LOrigine.MateriaPrimaID := LLottoMP.MateriaPrimaID;
         LOrigine.CodiceLotto := LLottoMP.CodiceLotto;
 
-        // DDT di acquisto: lotto -> riga DDT -> testata. ddt_entrata_riga_id e' NOT NULL,
-        // quindi LDDTRiga non dovrebbe essere nil; il controllo resta per robustezza.
+        // DDT di acquisto: risale da lotto -> riga DDT -> testata DDT.
+        // ddt_entrata_riga_id e' NOT NULL a livello di schema, quindi
+        // LDDTRiga non dovrebbe mai essere nil - il controllo resta
+        // comunque per robustezza (vedi commento di classe sopra).
         LDDTRiga := TDDTEntrataRiga.GetByID(LLottoMP.DdtEntrataRigaID);
         if LDDTRiga <> nil then
         try
@@ -389,7 +497,8 @@ begin
         LLottoMP.Free;
       end;
 
-      // Risalita a valle: riusa RisaliCatenaConsumoDaMateriaPrima, senza query duplicate.
+      // Risalita a valle: riusa TAL QUALE RisaliCatenaConsumoDaMateriaPrima,
+      // gia' esistente e verificata, nessuna duplicazione di query.
       LProdottiFinitiIDs := RisaliCatenaConsumoDaMateriaPrima(LLottoOrigineID);
 
       for LProdottoFinitoID in LProdottiFinitiIDs do
@@ -407,18 +516,35 @@ begin
             LImpattato.LottoProdottoFinitoID := LLottoPF.ID;
             LImpattato.ProdottoFinitoID := LLottoPF.ProdottoFinitoID;
             LImpattato.CodiceLotto := LLottoPF.CodiceLotto;
+            // Dati leggibili: li prendiamo ora, con il lotto gia' caricato.
+            LImpattato.Dettaglio.LottoProdottoFinitoID := LLottoPF.ID;
+            LImpattato.Dettaglio.CodiceLotto := LLottoPF.CodiceLotto;
+            LImpattato.Dettaglio.QuantitaDisponibile := LLottoPF.QuantitaDisponibile;
+            LImpattato.Dettaglio.UnitaMisura := LLottoPF.UnitaMisura;
+            LImpattato.Dettaglio.DataScadenza := LLottoPF.DataScadenza;
+            LProdotto := TProdottoFinito.GetByID(LLottoPF.ProdottoFinitoID);
+            if LProdotto <> nil then
+            try
+              LImpattato.Dettaglio.CodiceProdotto := LProdotto.Codice;
+              LImpattato.Dettaglio.DenominazioneProdotto := LProdotto.Denominazione;
+            finally
+              LProdotto.Free;
+            end;
             LImpattato.LottiMateriaPrimaOrigineIDs := [];
           finally
             LLottoPF.Free;
           end;
 
-          // La proprieta' passa subito a Result: la mappa indicizza solo per riferimento.
+          // La proprieta' dell'oggetto passa SUBITO a Result: la mappa lo
+          // indicizza solo per riferimento (vedi commento sulla var sopra).
           Result.LottiProdottoFinitoImpattati.Add(LImpattato);
           LMappaImpattati.Add(LProdottoFinitoID, LImpattato);
         end;
 
-        // Aggiunge questo lotto di origine a chi ha raggiunto il prodotto finito (puo'
-        // ripetersi se piu' lotti di origine lo raggiungono).
+        // Aggiunge questo lotto di origine all'elenco di chi ha raggiunto
+        // il prodotto finito - puo' capitare piu' di una volta per lo
+        // stesso prodotto se piu' lotti di origine lo raggiungono entrambi
+        // (vedi commento di classe su TLottoProdottoFinitoImpattato).
         LImpattato.LottiMateriaPrimaOrigineIDs :=
           LImpattato.LottiMateriaPrimaOrigineIDs + [LLottoOrigineID];
       end;
@@ -428,6 +554,8 @@ begin
     LMappaImpattati.Free;
   end;
 end;
+
+{ TEsitoAperturaRitiro }
 
 constructor TEsitoAperturaRitiro.Create;
 begin
@@ -453,6 +581,8 @@ var
   LAperta: TNonConformitaAperta;
   LImpattato: TLottoProdottoFinitoImpattato;
   LPFIDs: TArray<Integer>;
+  LPFDettagli: TArray<TDettaglioLottoProdottoFinito>;
+  LOrigine: TLottoMateriaPrimaOrigine;
   LEsistente: TNonConformita;
   LCodiciOccupati: string;
 begin
@@ -460,11 +590,15 @@ begin
     raise Exception.Create(
       'ApriRitiro: serve almeno un lotto di materia prima.');
 
-  // Il codice della non conformita' deve essere unico. Si verifica prima di scrivere
-  // ("tutto o niente"): se un codice e' occupato non si apre nulla e l'errore dice quale.
-  // Caso reale nei test (S1-B): il modello riproponeva l'apertura di una NC appena aperta,
-  // creando un doppione. Si controllano sia il codice base sia quelli con suffisso "-1",
-  // "-2", perche' quale servira' dipende dal numero di lotti distinti.
+  // CONTROLLO DI DIFESA (tappa 13): il codice della non conformita' deve
+  // essere unico. Lo verifichiamo PRIMA di scrivere qualunque riga ("tutto o
+  // niente"): se anche uno solo dei codici che stiamo per usare esiste gia',
+  // non si apre nulla e l'errore dice quale codice e' occupato, cosi' chi
+  // chiama (utente o modello) sa cosa correggere. Caso reale osservato nei
+  // test (S1-B): il modello riproponeva l'apertura di una non conformita'
+  // appena aperta, e senza questo controllo ne sarebbe nata una doppia.
+  // Si controllano sia il codice base sia quelli con suffisso "-1", "-2"...
+  // perche' quale dei due verra' usato dipende dal numero di lotti distinti.
   LCodiciOccupati := '';
   LIDsProcessati := TList<Integer>.Create;
   try
@@ -495,15 +629,19 @@ begin
       'Se e'' quella appena aperta non va riaperta; per aprirne una nuova serve un codice diverso.',
       [LCodiciOccupati]);
 
-  // Riusa RaccogliDatiPerMateriaPrima (stessa risalita e stesso DDT, nessuna query
-  // duplicata). LDati e' di questo metodo (Free nel finally).
+  // Riusa RaccogliDatiPerMateriaPrima: stessa risalita di filiera, stesso
+  // DDT di acquisto, nessuna query duplicata. LDati resta di proprieta'
+  // di questo metodo (Free nel finally), i dati che servono all'esito
+  // vengono copiati/filtrati in LottiProdottoFinitoIDs.
   LDati := RaccogliDatiPerMateriaPrima(ALottiMateriaPrimaID);
   try
     Result := TEsitoAperturaRitiro.Create;
 
-    // Stessa guardia anti-duplicati: evita di aprire due volte la NC sullo stesso lotto e
-    // di sbagliare il suffisso (Length(ALottiMateriaPrimaID) da solo potrebbe contare
-    // ripetizioni).
+    // Stessa guardia anti-duplicati di RaccogliDatiPerMateriaPrima: serve
+    // anche qui, sia per non aprire due volte la stessa non conformita'
+    // sullo stesso lotto sia per calcolare correttamente se serve o meno
+    // il suffisso numerico sul codice (Length(ALottiMateriaPrimaID) da
+    // solo non basta, potrebbe contenere ripetizioni).
     LIDsProcessati := TList<Integer>.Create;
     try
       for LLottoOrigineID in ALottiMateriaPrimaID do
@@ -515,15 +653,17 @@ begin
       begin
         Inc(LIndiceRiga);
 
-        // Un solo lotto (dopo dedup): codice com'e'. Piu' lotti: suffisso "-1", "-2", ...
-        // nell'ordine di elaborazione.
+        // Un solo lotto (dopo dedup): il codice fornito resta cosi'
+        // com'e'. Piu' di uno: suffisso "-1", "-2", ... nell'ordine di
+        // elaborazione (vedi commento sulla dichiarazione del metodo).
         if LIDsProcessati.Count = 1 then
           LCodiceNC := ACodiceNCBase
         else
           LCodiceNC := ACodiceNCBase + '-' + IntToStr(LIndiceRiga);
 
-        // 1) Scrittura: una riga in non_conformita per lotto. EnsureAlmenoUnLottoValido (in
-        // Insert) non puo' fallire: LottoMateriaPrimaID e' sempre valorizzato.
+        // 1) Scrittura vera e propria: una riga in non_conformita per
+        //    questo lotto. EnsureAlmenoUnLottoValido (dentro Insert) non
+        //    puo' fallire qui: LottoMateriaPrimaID e' sempre valorizzato.
         LNC := TNonConformita.Create;
         try
           LNC.CodiceNC := LCodiceNC;
@@ -535,18 +675,27 @@ begin
           LAperta.NonConformitaID := LNC.ID;
           LAperta.CodiceNC := LNC.CodiceNC;
           LAperta.LottoMateriaPrimaID := LLottoOrigineID;
+          for LOrigine in LDati.LottiOrigine do
+            if LOrigine.LottoMateriaPrimaID = LLottoOrigineID then
+              LAperta.CodiceLottoMateriaPrima := LOrigine.CodiceLotto;
         finally
           LNC.Free;
         end;
 
-        // 2) Dall'analisi gia' calcolata, solo i lotti di prodotto finito raggiunti da
-        // questo lotto di origine (TNonConformitaAperta).
+        // 2) Filtra dall'analisi gia' calcolata i soli lotti di prodotto
+        //    finito raggiunti DA QUESTO lotto di origine (vedi commento
+        //    di classe su TNonConformitaAperta).
         LPFIDs := [];
+        LPFDettagli := [];
         for LImpattato in LDati.LottiProdottoFinitoImpattati do
           if TArray.Contains<Integer>(LImpattato.LottiMateriaPrimaOrigineIDs, LLottoOrigineID) then
+          begin
             LPFIDs := LPFIDs + [LImpattato.LottoProdottoFinitoID];
+            LPFDettagli := LPFDettagli + [LImpattato.Dettaglio];
+          end;
 
         LAperta.LottiProdottoFinitoIDs := LPFIDs;
+        LAperta.LottiProdottoFinito := LPFDettagli;
         LAperta.RichiedeSchedaNotificaOSA := Length(LPFIDs) > 0;
 
         Result.NonConformitaAperte.Add(LAperta);
@@ -558,6 +707,8 @@ begin
     LDati.Free;
   end;
 end;
+
+{ TEsposizioneOrdine }
 
 constructor TEsposizioneOrdine.Create;
 begin
@@ -571,6 +722,8 @@ begin
   inherited Destroy;
 end;
 
+{ TLottoConClienti }
+
 constructor TLottoConClienti.Create;
 begin
   inherited Create;
@@ -582,6 +735,8 @@ begin
   Esposizioni.Free;
   inherited Destroy;
 end;
+
+{ TEsitoClientiPerLotti }
 
 constructor TEsitoClientiPerLotti.Create;
 begin
@@ -595,10 +750,14 @@ begin
   inherited Destroy;
 end;
 
-// Tool "B": per ogni lotto, le righe ordine che lo referenziano
-// (TOrdineVenditaRiga.GetByLottoProdottoFinito), l'header ordine (cliente, numero) e le
-// righe DDT di uscita gia' emesse. Sola lettura, multi-lotto come
-// RaccogliDatiPerMateriaPrima.
+// Tool "B" (vedi discussione di progetto e commento sulla dichiarazione,
+// piu' sopra): per ogni lotto di prodotto finito passato, trova le righe
+// ordine che lo referenziano (TOrdineVenditaRiga.GetByLottoProdottoFinito,
+// gia' esistente) e, per ciascuna, risale all'header ordine (cliente,
+// numero) e alle eventuali righe di DDT di uscita gia' emesse per quella
+// riga specifica. Pura lettura, nessuna scrittura, multi-lotto in input
+// come RaccogliDatiPerMateriaPrima - stesso principio "tool generico e
+// parametrico" del documento di progetto.
 class function TServizioRitiroRichiamo.TrovaClientiLottoProdottoFinito(
   const ALottiProdottoFinitoID: TArray<Integer>): TEsitoClientiPerLotti;
 var
@@ -614,15 +773,18 @@ var
   LSpedizione: TSpedizioneRiga;
   LLotto: TLottoProdottoFinito;
   LInesistenti: string;
+  LProdotto: TProdottoFinito;
+  LCliente: TCliente;
 begin
   if Length(ALottiProdottoFinitoID) = 0 then
     raise Exception.Create(
       'TrovaClientiLottoProdottoFinito: serve almeno un lotto di prodotto finito.');
 
-  // Ogni id deve essere un lotto di prodotto finito esistente. Prima un id inventato dava
-  // "nessun ordine", cioe' un falso "non e' stato spedito a nessuno" in uno scenario di
-  // richiamo. Ora "lotto senza ordini" (lista vuota, normale) e "lotto inesistente"
-  // (errore) sono distinti.
+  // CONTROLLO DI DIFESA (tappa 13): ogni id deve essere un lotto di prodotto
+  // finito che esiste. Prima un id inventato dava "nessun ordine", cioe' una
+  // risposta rassicurante e FALSA ("non e' stato spedito a nessuno") proprio
+  // in uno scenario di richiamo. Ora "lotto esistente senza ordini" (lista
+  // vuota, caso normale) e "lotto inesistente" (errore) restano distinti.
   LInesistenti := '';
   for LLottoProdottoFinitoID in ALottiProdottoFinitoID do
   begin
@@ -646,11 +808,29 @@ begin
 
   for LLottoProdottoFinitoID in ALottiProdottoFinitoID do
   begin
-    // Esistenza gia' verificata sopra. Un lotto senza ordini e' un caso normale:
-    // Esposizioni resta vuota.
+    // L'esistenza del lotto e' gia' stata verificata sopra. Un lotto di
+    // prodotto finito senza ordini collegati e' un caso normale
+    // (semplicemente Esposizioni resta vuota), non un errore.
     LLottoConClienti := TLottoConClienti.Create;
     LLottoConClienti.LottoProdottoFinitoID := LLottoProdottoFinitoID;
     Result.Lotti.Add(LLottoConClienti);
+
+    // Codice lotto e prodotto in chiaro (l'esistenza e' gia' verificata sopra).
+    LLotto := TLottoProdottoFinito.GetByID(LLottoProdottoFinitoID);
+    if LLotto <> nil then
+    try
+      LLottoConClienti.CodiceLotto := LLotto.CodiceLotto;
+      LProdotto := TProdottoFinito.GetByID(LLotto.ProdottoFinitoID);
+      if LProdotto <> nil then
+      try
+        LLottoConClienti.CodiceProdotto := LProdotto.Codice;
+        LLottoConClienti.DenominazioneProdotto := LProdotto.Denominazione;
+      finally
+        LProdotto.Free;
+      end;
+    finally
+      LLotto.Free;
+    end;
 
     LRigheOrdine := TOrdineVenditaRiga.GetByLottoProdottoFinito(LLottoProdottoFinitoID);
     try
@@ -661,18 +841,26 @@ begin
         LEsposizione.OrdineVenditaID := LRigaOrdine.OrdineVenditaID;
         LEsposizione.Quantita := LRigaOrdine.Quantita;
 
-        // Solo l'header porta cliente e numero ordine, non la riga.
+        // Header ordine: solo da qui si arriva al cliente e al numero
+        // ordine, la riga non li porta (vedi commento di classe).
         LOrdine := TOrdineVendita.GetByID(LRigaOrdine.OrdineVenditaID);
         if LOrdine <> nil then
         try
           LEsposizione.NumeroOrdine := LOrdine.NumeroOrdine;
           LEsposizione.ClienteID := LOrdine.ClienteID;
+          LCliente := TCliente.GetByID(LOrdine.ClienteID);
+          if LCliente <> nil then
+          try
+            LEsposizione.RagioneSocialeCliente := LCliente.RagioneSociale;
+          finally
+            LCliente.Free;
+          end;
         finally
           LOrdine.Free;
         end;
 
-        // Spedizioni gia' emesse per questa riga: zero, una o piu' (evasione parziale su
-        // piu' DDT).
+        // Spedizioni gia' emesse per QUESTA riga specifica: zero, una, o
+        // piu' di una in caso di evasione parziale su piu' DDT.
         LRigheDDT := TDDTUscitaRiga.GetByOrdineVenditaRiga(LRigaOrdine.ID);
         try
           for LRigaDDT in LRigheDDT do
@@ -702,6 +890,8 @@ begin
   end;
 end;
 
+{ TComunicazioneCliente }
+
 constructor TComunicazioneCliente.Create;
 begin
   inherited Create;
@@ -717,10 +907,11 @@ end;
 class function TServizioRitiroRichiamo.TrovaComunicazioniClienti(
   const ALottiProdottoFinitoID: TArray<Integer>): TObjectList<TComunicazioneCliente>;
 const
-  // Le virgolette fissano la barra: "/" da solo sarebbe il separatore di data di Windows.
+  // Le virgolette tengono fissa la barra: "/" da solo sarebbe il separatore
+  // di data delle impostazioni di Windows.
   FORMATO_DATA = 'dd"/"mm"/"yyyy';
 
-  // La comunicazione di (cliente, caso) gia' in elenco, o una nuova.
+  // La comunicazione di (cliente, caso) gia' in elenco, oppure una nuova.
   function ComunicazionePer(AElenco: TObjectList<TComunicazioneCliente>;
     AClienteID: Integer; AMerceSpedita: Boolean): TComunicazioneCliente;
   var
@@ -761,16 +952,16 @@ begin
   // Numeri con la virgola decimale, qualunque sia la lingua di Windows.
   LFormato := TFormatSettings.Create('it-IT');
 
-  // Stessa ricerca (e controlli sugli id) dell'altro tool: un solo punto decide quali
-  // ordini e DDT riguardano un lotto.
+  // Stessa ricerca (e stessi controlli sugli id) dell'altro tool: un solo
+  // punto decide quali ordini e quali DDT riguardano un lotto.
   LEsito := TrovaClientiLottoProdottoFinito(ALottiProdottoFinitoID);
   try
     Result := TObjectList<TComunicazioneCliente>.Create(True);
     try
       for LLottoConClienti in LEsito.Lotti do
       begin
-        // "Prodotto (codice), lotto X, scadenza gg/mm/aaaa": quello che il cliente legge
-        // sulla confezione, non l'id del database.
+        // "Prodotto (codice), lotto X, scadenza gg/mm/aaaa": e' cio' che il
+        // cliente trova scritto sulla confezione, non l'id del database.
         LDescrizioneLotto := Format('lotto id %d', [LLottoConClienti.LottoProdottoFinitoID]);
         LLotto := TLottoProdottoFinito.GetByID(LLottoConClienti.LottoProdottoFinitoID);
         if LLotto <> nil then
@@ -800,7 +991,7 @@ begin
           finally
             LOrdine.Free;
           end;
-          // Un ordine annullato non verra' consegnato: nessun avviso.
+          // Un ordine annullato non verra' mai consegnato: nessun avviso.
           if LAnnullato then
             Continue;
 
@@ -820,7 +1011,7 @@ begin
             LTesto := LTesto + Format(', DDT %s del %s',
               [LSpedizione.NumeroDDT, FormatDateTime(FORMATO_DATA, LSpedizione.DataSpedizione)]);
 
-          // Il caso si decide per riga d'ordine: almeno un DDT = spedita.
+          // Il caso si decide per RIGA d'ordine: almeno un DDT = spedita.
           ComunicazionePer(Result, LEsposizione.ClienteID,
             LEsposizione.Spedizioni.Count > 0).Righe.Add(LTesto);
         end;

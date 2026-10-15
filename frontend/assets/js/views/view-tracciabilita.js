@@ -208,7 +208,7 @@
                 '<div class="col-lg-6">' +
                     U.card({
                         icona: 'box', titolo: 'Semilavorati coinvolti (' + albero.semilavorati_coinvolti.length + ')',
-                        contenuto: tabellaSemilavoratiCoinvolti(albero.semilavorati_coinvolti)
+                        contenuto: tabellaSemilavoratiCoinvolti(albero.semilavorati_coinvolti, albero.prodotti_finiti_raggiunti)
                     }) +
                 '</div>' +
                 '<div class="col-lg-6">' +
@@ -221,25 +221,54 @@
         '</div>';
     }
 
-    function tabellaSemilavoratiCoinvolti(elenco) {
+    // I prodotti finiti che sono stati raggiunti ATTRAVERSO un dato lotto
+    // di semilavorato: il legame e' nei "percorsi" del prodotto finito
+    // (campo tramite_codice_lotto, vedi AggiungiProdottoFinitoRaggiunto
+    // lato backend). Un semilavorato che alimenta solo un altro
+    // semilavorato non ha prodotti finiti propri: i suoi arrivano
+    // attraverso il semilavorato a valle.
+    function prodottiFinitiDa(codiceLottoSemilavorato, prodottiFiniti) {
+        return (prodottiFiniti || []).filter((pf) =>
+            percorsiDi(pf).some((p) => p.tramite_codice_lotto === codiceLottoSemilavorato));
+    }
+
+    // Seconda riga della cella del semilavorato: dice dove e' finito e,
+    // se ce ne sono, permette di evidenziarli nella colonna di destra.
+    function collegamentoProdottiFiniti(l, prodottiFiniti) {
+        const n = prodottiFinitiDa(l.codice_lotto, prodottiFiniti).length;
+        if (!n) {
+            return '<div class="small text-body-secondary">Nessun prodotto finito diretto</div>';
+        }
+        return '<div class="small"><button type="button" class="btn btn-link btn-sm p-0 align-baseline" ' +
+            'data-evidenzia-lotto="' + U.esc(l.codice_lotto) + '">' +
+            'Usato in ' + n + (n === 1 ? ' prodotto finito' : ' prodotti finiti') + ' &rsaquo;</button></div>';
+    }
+
+    function tabellaSemilavoratiCoinvolti(elenco, prodottiFiniti) {
         if (!elenco.length) {
             return '<div class="card-body text-body-secondary small">Nessuno.</div>';
         }
 
+        // "In magazzino" = quantita_disponibile del lotto: per un
+        // ritiro/richiamo e' il dato che dice se c'e' ancora qualcosa
+        // da bloccare in azienda.
         const righe = elenco.map((l) =>
             '<tr class="align-middle" style="cursor:pointer" data-apri-semilavorato="' + l.semilavorato_id + '">' +
                 '<td>' + U.esc(l.entita_denominazione) +
                     '<div class="small text-body-secondary">' + U.esc(l.entita_codice) + '</div>' +
+                    collegamentoProdottiFiniti(l, prodottiFiniti) +
                 '</td>' +
                 '<td><code>' + U.esc(l.codice_lotto) + '</code></td>' +
                 '<td>' + badgeDirettezza(l.consumato_direttamente) + '</td>' +
                 '<td class="text-end">' + U.fmtNum(l.quantita_consumata, 2) + ' ' + U.esc(l.unita_misura_consumata || l.unita_misura || '') + '</td>' +
+                '<td class="text-end">' + U.fmtNum(l.quantita_disponibile, 2) + ' ' + U.esc(l.unita_misura || '') + '</td>' +
             '</tr>'
         ).join('');
 
         return U.tabella([
             { testo: 'Semilavorato' }, { testo: 'Lotto' }, { testo: 'Consumo' },
-            { testo: 'Quantit&agrave; consumata', allineaDx: true }
+            { testo: 'Quantit&agrave; consumata', allineaDx: true },
+            { testo: 'In magazzino', allineaDx: true }
         ], righe);
     }
 
@@ -258,10 +287,45 @@
         '</div>';
     }
 
+    // Un lotto di prodotto finito compare UNA volta sola, anche se e'
+    // stato raggiunto da piu' consumi (es. la stessa materia prima usata
+    // sia direttamente sia dentro un semilavorato): ogni consumo e' una
+    // voce di "percorsi" (vedi AggiungiProdottoFinitoRaggiunto lato
+    // backend). Le quantita' dei percorsi riguardano componenti diversi:
+    // si mostrano una per riga, non si sommano.
+    // Compatibilita': un elemento senza "percorsi" (formato precedente,
+    // ancora usato dai dati demo) e' trattato come un percorso unico.
+    function percorsiDi(pf) {
+        if (Array.isArray(pf.percorsi) && pf.percorsi.length) {
+            return pf.percorsi;
+        }
+        return [{
+            consumato_direttamente: pf.consumato_direttamente,
+            quantita_consumata: pf.quantita_consumata,
+            unita_misura_consumata: pf.unita_misura_consumata || pf.unita_misura
+        }];
+    }
+
+    function rigaPercorso(percorso) {
+        return '<div class="d-flex justify-content-end align-items-center gap-2">' +
+            (percorso.tramite_codice_lotto
+                ? '<span class="text-body-secondary">tramite <code>' + U.esc(percorso.tramite_codice_lotto) + '</code></span>'
+                : '') +
+            badgeDirettezza(percorso.consumato_direttamente) +
+            '<span class="text-end">' + U.fmtNum(percorso.quantita_consumata, 2) + ' ' +
+                U.esc(percorso.unita_misura_consumata || '') + '</span>' +
+        '</div>';
+    }
+
     function cardProdottoFinitoRaggiunto(pf, indice) {
         const idCollapse = 'spedizioniPf' + indice;
 
-        return '<div class="p-3' + (indice > 0 ? ' border-top' : '') + '">' +
+        // Codici dei semilavorati attraverso cui questo lotto e' stato
+        // raggiunto: servono solo all'evidenziazione dal pannello dei
+        // semilavorati (data-tramite, confrontato in collegaApertura).
+        const tramite = percorsiDi(pf).map((p) => p.tramite_codice_lotto).filter(Boolean).join('|');
+
+        return '<div class="p-3' + (indice > 0 ? ' border-top' : '') + '" data-pf-card data-tramite="' + U.esc(tramite) + '">' +
             '<div class="d-flex flex-wrap align-items-center gap-2" style="cursor:pointer" ' +
                     'data-apri-prodotto-finito="' + pf.prodotto_finito_id + '">' +
                 '<div class="flex-grow-1">' +
@@ -269,10 +333,7 @@
                     '<div class="small text-body-secondary"><code>' + U.esc(pf.codice_lotto) + '</code> &middot; ' +
                         U.esc(pf.entita_codice) + '</div>' +
                 '</div>' +
-                badgeDirettezza(pf.consumato_direttamente) +
-                '<div class="text-end small">' +
-                    U.fmtNum(pf.quantita_consumata, 2) + ' ' + U.esc(pf.unita_misura_consumata || pf.unita_misura || '') +
-                '</div>' +
+                '<div class="small">' + percorsiDi(pf).map(rigaPercorso).join('') + '</div>' +
             '</div>' +
             '<button type="button" class="btn btn-sm btn-link px-0 mt-1" data-toggle-collapse="' + idCollapse + '">' +
                 pf.spedizioni.length + ' spedizion' + (pf.spedizioni.length === 1 ? 'e' : 'i') +
@@ -353,6 +414,27 @@
         if (!contenitore) return;
 
         contenitore.addEventListener('click', (e) => {
+            // Evidenzia nella colonna di destra i prodotti finiti
+            // raggiunti attraverso questo semilavorato. Va controllato
+            // PRIMA dell'apertura dell'anagrafica: il link sta dentro la
+            // riga cliccabile. Secondo click sullo stesso link = toglie
+            // l'evidenziazione (lo stato e' nel DOM, niente da ricaricare).
+            const evidenzia = e.target.closest('[data-evidenzia-lotto]');
+            if (evidenzia) {
+                const eraAttivo = evidenzia.classList.contains('fw-bold');
+                contenitore.querySelectorAll('[data-evidenzia-lotto]').forEach((b) => b.classList.remove('fw-bold'));
+                contenitore.querySelectorAll('[data-pf-card]').forEach((c) => c.classList.remove('bg-warning-subtle'));
+                if (!eraAttivo) {
+                    evidenzia.classList.add('fw-bold');
+                    const codice = evidenzia.dataset.evidenziaLotto;
+                    const trovate = Array.from(contenitore.querySelectorAll('[data-pf-card]'))
+                        .filter((c) => (c.dataset.tramite || '').split('|').includes(codice));
+                    trovate.forEach((c) => c.classList.add('bg-warning-subtle'));
+                    if (trovate.length) trovate[0].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                }
+                return;
+            }
+
             const apriSemilavorato = e.target.closest('[data-apri-semilavorato]');
             if (apriSemilavorato) {
                 App.Router.vaiA(App.Router.url('semilavorati', [apriSemilavorato.dataset.apriSemilavorato]));

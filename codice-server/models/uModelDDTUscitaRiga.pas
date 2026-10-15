@@ -9,11 +9,18 @@ uses
   DbU;
 
 type
-  // Riga di DDT di uscita: la spedizione di una riga d'ordine (ddt_uscita_righe).
-  // Referenzia OrdineVenditaRigaID, non prodotto o lotto, che si ottengono risalendo alla
-  // riga ordine (prodotto_finito_id, lotto_prodotto_finito_id).
-  // QuantitaSpedita puo' differire da quella ordinata (spedizioni parziali, rotture di
-  // stock): un ordine puo' avere piu' righe DDT sullo stesso OrdineVenditaRigaID.
+  // Rappresenta una riga di un DDT di uscita: la spedizione effettiva di
+  // una riga d'ordine vendita (tabella ddt_uscita_righe). Non
+  // referenzia direttamente un prodotto o un lotto: referenzia
+  // OrdineVenditaRigaID, cioe' QUALE riga ordine viene evasa da questa
+  // spedizione. Prodotto e lotto si ottengono a cascata risalendo alla
+  // riga ordine (che a sua volta punta a prodotto_finito_id e
+  // lotto_prodotto_finito_id).
+  //
+  // QuantitaSpedita puo' differire dalla quantita' ordinata sulla riga
+  // (spedizioni parziali, rotture di stock): per questo un solo ordine
+  // puo' generare piu' righe DDT su DDT diversi, tutte con lo stesso
+  // OrdineVenditaRigaID mano a mano che l'ordine viene evaso.
   TDDTUscitaRiga = class
   private
     FID: Integer;
@@ -34,9 +41,12 @@ type
     property QuantitaSpedita: Currency read FQuantitaSpedita write FQuantitaSpedita;
     property UnitaMisura: string read FUnitaMisura write FUnitaMisura;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ddt_uscita_righe_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TDDTUscitaRiga;
     class function GetAll: TObjectList<TDDTUscitaRiga>;
     class function GetByDDTUscita(ADDTUscitaID: Integer): TObjectList<TDDTUscitaRiga>;
@@ -58,6 +68,8 @@ const
     'SELECT id, ddt_uscita_id, ordine_vendita_riga_id, quantita_spedita, ' +
     'unita_misura, creato_il, aggiornato_il ' +
     'FROM ddt_uscita_righe ';
+
+{ TDDTUscitaRiga }
 
 constructor TDDTUscitaRiga.Create;
 begin
@@ -121,7 +133,7 @@ var
   LAutoQuery: TAutoQuery;
   LRiga: TDDTUscitaRiga;
 begin
-  // Righe di un DDT di uscita.
+  // Tutte le righe di un DDT di uscita.
   Result := TObjectList<TDDTUscitaRiga>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -145,8 +157,9 @@ var
   LAutoQuery: TAutoQuery;
   LRiga: TDDTUscitaRiga;
 begin
-  // Spedizioni (anche parziali) di una riga ordine. La somma di QuantitaSpedita e' quanto
-  // e' stato consegnato.
+  // Tutte le spedizioni (eventualmente parziali) che hanno evaso una
+  // specifica riga ordine. Sommando QuantitaSpedita su questo insieme si
+  // ottiene quanto di quella riga e' stato effettivamente consegnato.
   Result := TObjectList<TDDTUscitaRiga>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -167,7 +180,9 @@ end;
 
 class function TDDTUscitaRiga.Delete(AID: Integer): Boolean;
 begin
-  // Nodo foglia: nessuna FK lo referenzia.
+  // Nessun'altra tabella referenzia ddt_uscita_righe come FK (e' un
+  // "nodo foglia" nello schema): la cancellazione non incontra vincoli
+  // di integrita' referenziale da parte di altre tabelle.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ddt_uscita_righe WHERE id = :id', [AID]);
 end;
@@ -176,7 +191,8 @@ function TDDTUscitaRiga.Insert: Integer;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // creato_il/aggiornato_il: DEFAULT del database.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ddt_uscita_righe ' +
     '(ddt_uscita_id, ordine_vendita_riga_id, quantita_spedita, unita_misura) ' +
@@ -197,7 +213,8 @@ function TDDTUscitaRiga.Update: Boolean;
 var
   LAutoQuery: TAutoQuery;
 begin
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ddt_uscita_righe_aggiornato_il lo valorizza automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ddt_uscita_righe SET ddt_uscita_id = :ddt_uscita_id, ' +
     'ordine_vendita_riga_id = :ordine_vendita_riga_id, ' +
@@ -243,7 +260,8 @@ var
   LValStr: string;
   LValNum: TJSONValue;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<Integer>('ddt_uscita_id', LValInt) then
     FDDTUscitaID := LValInt;
   if AJSON.TryGetValue<Integer>('ordine_vendita_riga_id', LValInt) then
@@ -251,7 +269,8 @@ begin
   if AJSON.TryGetValue<string>('unita_misura', LValStr) then
     FUnitaMisura := LValStr;
 
-  // Decimali letti come TJSONNumber, per non perdere precisione.
+  // Campo numerico decimale: letto come TJSONNumber per preservarne la
+  // precisione (evitando conversioni intermedie a Double)
   if AJSON.TryGetValue<TJSONValue>('quantita_spedita', LValNum) and (LValNum is TJSONNumber) then
     FQuantitaSpedita := TJSONNumber(LValNum).AsDouble;
 end;

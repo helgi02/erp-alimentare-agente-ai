@@ -1,14 +1,49 @@
 unit uStoricoTurni;
 
-// Storico dei turni per il pianificatore: un record per turno con domanda, piano, esiti,
-// risposta e stato.
-// Lo stato rende possibili i turni successivi: "si', procedi" ha senso solo dopo
-// in_attesa_conferma, "il secondo" solo dopo in_attesa_scelta.
-// Al Planner arrivano gli ultimi NTurni turni; i risultati dei tool solo per gli ultimi
-// EsitiTurni, ridotti da RiduciOutput per non gonfiare il prompt.
-// RiduciOutput tronca gli array ai primi MaxElementi e aggiunge "<nome>__totale" con il
-// numero originale; gli id restano. Nello storico gli array di soli valori (id, codici)
-// restano interi e gli array annidati non si riportano.
+(* ============================================================================
+  STORICO DEI TURNI - tappa 8 del porting del pianificatore.
+  Porting di scripts/prototipo_pianificatore/pianificatore/history.py e della
+  struttura TurnoStorico di contratti.py (specifica: CONTRATTI.md, paragrafo 8).
+
+  -- Perche' uno storico diverso da quello dell'orchestratore attuale -----------
+  L'orchestratore attuale conserva la conversazione come elenco di messaggi
+  chat (utente, assistente, tool). Il Planner non lavora sui messaggi: gli
+  serve, per ogni turno passato, COSA era stato chiesto, QUALE piano ne era
+  uscito, com'e' andata e in che STATO e' rimasto il turno. Un record per
+  turno:
+
+    domanda        il messaggio dell'utente
+    piano          il piano prodotto (nil se non valido)
+    esiti          i passi eseguiti: tool, argomenti, esito, risultato RIDOTTO
+    risposta       il testo dato all'utente
+    stato          concluso | in_attesa_scelta | in_attesa_conferma
+    tool_in_attesa la scrittura proposta che aspetta la conferma
+
+  Lo stato e' cio' che rende possibili i turni successivi: "si', procedi"
+  ha senso solo se il turno prima e' in_attesa_conferma, "il secondo" solo
+  se e' in_attesa_scelta.
+
+  -- Le proposte dell'assistente (PropostaAperta) ----------------------------------
+  Un "si'" puo' rispondere anche a una domanda che l'assistente ha posto in
+  una risposta qualunque ("Vuoi che cerchi il Cioccolato bianco?", "Vuoi che
+  prepari le email?"). Non serve un campo in piu' ne' un'indicazione dal
+  tool o dal modello: una risposta di un turno concluso che finisce con "?"
+  e' una proposta, e il suo testo (l'ultima frase interrogativa) si ricava
+  dalla risposta stessa. E' cosi' per qualsiasi scenario e qualsiasi tool.
+
+  -- Cosa vede il Planner (PerLLM) -------------------------------------------------
+  Gli ultimi NTurni turni (6). Per ciascuno: domanda, piano (esito e azioni,
+  con il tool quando c'era), risposta, stato. I RISULTATI dei tool solo per
+  gli ultimi EsitiTurni turni (nel run di riferimento: 1) e in forma ridotta,
+  per non far crescere il prompt: servono ai seguiti che usano un valore
+  appena visto ("e' gia' stato spedito?" ha bisogno degli id dei lotti).
+
+  -- Riduzione dei risultati (RiduciOutput) -----------------------------------------
+  Gli array vengono troncati ai primi MaxElementi, con accanto il campo
+  "<nome>__totale" che dice quanti erano. Gli id restano. Per lo storico
+  (AAnnidati = False) gli array di soli valori (id, codici) restano INTERI e
+  gli array dentro gli elementi di un array non vengono riportati.
+  ============================================================================ *)
 
 interface
 
@@ -45,7 +80,8 @@ type
     MaxElementi: Integer;   // elementi di un array tenuti nello storico
     EsitiTurni: Integer;    // ultimi turni di cui il Planner vede i risultati
     Turni: TObjectList<TTurnoStorico>;
-    // Valori predefiniti: 6 turni, 3 elementi, esiti solo dell'ultimo turno.
+    // Valori del run conv_20261001_235839: 6 turni, 3 elementi, esiti
+    // dell'ultimo turno.
     constructor Create;
     destructor Destroy; override;
 
@@ -58,6 +94,11 @@ type
     function ToolNoti: TArray<string>;
     // True se l'ultimo turno aspetta la conferma proprio di ATool.
     function InAttesaConferma(const ATool: string): Boolean;
+    // Testo della proposta lasciata dall'ULTIMO turno, o '' se non ce n'e'.
+    // C'e' una proposta solo se l'ultimo turno e' concluso (le attese di
+    // scelta e di conferma hanno la loro strada) e la sua risposta finisce
+    // con "?".
+    function PropostaAperta: string;
     // Resa testuale per il Planner.
     function PerLLM: string;
 
@@ -65,6 +106,16 @@ type
     // ridotti come li vuole lo storico. Del chiamante.
     function EsitiDaEsecuzione(AEsecuzione: TEsitoEsecuzione): TJSONArray;
   end;
+
+// Testo della proposta contenuta in ARisposta: l'ultima frase interrogativa,
+// se la risposta finisce con "?". Altrimenti stringa vuota.
+function EstraiProposta(const ARisposta: string): string;
+// True se AMessaggio e' una risposta breve (al massimo AMaxParole parole), cioe'
+// plausibilmente un "si'" o un "no" e non una nuova richiesta.
+function MessaggioBreve(const AMessaggio: string; AMaxParole: Integer = 8): Boolean;
+// Risposta secca senza ambiguita': "si'", "ok", "procedi" -> 1; "no",
+// "annulla" -> -1; qualsiasi altra cosa -> 0 (la decide il modello).
+function RispostaSecca(const AMessaggio: string): Integer;
 
 // Copia ridotta di un risultato (vedi il commento in testa). Del chiamante.
 function RiduciOutput(AValore: TJSONValue; AMaxElementi: Integer = 5;
@@ -74,6 +125,78 @@ implementation
 
 uses
   uSchemaJSON;
+
+function EstraiProposta(const ARisposta: string): string;
+const
+  MAX_CARATTERI_PROPOSTA = 300;
+var
+  LTesto: string;
+  i, LInizio: Integer;
+  LSuccessivo: Char;
+begin
+  Result := '';
+  LTesto := Trim(ARisposta);
+  if (LTesto = '') or (LTesto[Length(LTesto)] <> '?') then
+    Exit;
+  // L'inizio della frase: dopo l'ultimo "." "!" "?" seguito da spazio o a
+  // capo, oppure dopo l'ultimo a capo. I puntini ("bianco...?") non contano:
+  // il punto non e' seguito da uno spazio.
+  LInizio := 1;
+  for i := Length(LTesto) - 1 downto 1 do
+  begin
+    if LTesto[i] = #10 then
+    begin
+      LInizio := i + 1;
+      Break;
+    end;
+    if CharInSet(LTesto[i], ['.', '!', '?']) then
+    begin
+      LSuccessivo := LTesto[i + 1];
+      if (LSuccessivo = ' ') or (LSuccessivo = #10) or (LSuccessivo = #13) then
+      begin
+        LInizio := i + 1;
+        Break;
+      end;
+    end;
+  end;
+  Result := Trim(Copy(LTesto, LInizio, MaxInt));
+  if Length(Result) > MAX_CARATTERI_PROPOSTA then
+    Result := Copy(Result, Length(Result) - MAX_CARATTERI_PROPOSTA + 1, MaxInt);
+end;
+
+function MessaggioBreve(const AMessaggio: string; AMaxParole: Integer): Boolean;
+var
+  LParole: TArray<string>;
+begin
+  LParole := Trim(AMessaggio).Split([' ', #9, #10, #13], TStringSplitOptions.ExcludeEmpty);
+  Result := (Length(LParole) > 0) and (Length(LParole) <= AMaxParole);
+end;
+
+function RispostaSecca(const AMessaggio: string): Integer;
+const
+  AFFERMAZIONI: array[0..13] of string = ('si', 'ok', 'okay', 'certo', 'certamente',
+    'procedi', 'va bene', 'confermo', 'fallo', 'si grazie', 'si certo', 'si procedi',
+    'si ok', 'esatto');
+  NEGAZIONI: array[0..6] of string = ('no', 'no grazie', 'annulla', 'lascia stare',
+    'non serve', 'non voglio', 'niente');
+var
+  LTesto, LParola: string;
+begin
+  // Minuscolo, senza accenti sulla i (si' scritto con o senza accento), senza
+  // punteggiatura finale.
+  LTesto := LowerCase(Trim(AMessaggio));
+  LTesto := StringReplace(LTesto, #$00EC, 'i', [rfReplaceAll]);
+  LTesto := StringReplace(LTesto, '''', '', [rfReplaceAll]);
+  while (LTesto <> '') and CharInSet(LTesto[Length(LTesto)], ['.', '!', ',', ' ']) do
+    Delete(LTesto, Length(LTesto), 1);
+  Result := 0;
+  for LParola in AFFERMAZIONI do
+    if LTesto = LParola then
+      Exit(1);
+  for LParola in NEGAZIONI do
+    if LTesto = LParola then
+      Exit(-1);
+end;
 
 function Contenitore(AValore: TJSONValue): Boolean;
 begin
@@ -147,6 +270,8 @@ begin
   Result := Riduci(AValore, AMaxElementi, AAnnidati, False);
 end;
 
+{ TTurnoStorico }
+
 constructor TTurnoStorico.Create;
 begin
   inherited;
@@ -160,6 +285,8 @@ begin
   Esiti.Free;
   inherited;
 end;
+
+{ TStoricoTurni }
 
 constructor TStoricoTurni.Create;
 begin
@@ -228,6 +355,13 @@ function TStoricoTurni.InAttesaConferma(const ATool: string): Boolean;
 begin
   Result := (Ultimo <> nil) and (Ultimo.Stato = STATO_IN_ATTESA_CONFERMA) and
     (Ultimo.ToolInAttesa = ATool);
+end;
+
+function TStoricoTurni.PropostaAperta: string;
+begin
+  Result := '';
+  if (Ultimo <> nil) and (Ultimo.Stato = STATO_CONCLUSO) then
+    Result := EstraiProposta(Ultimo.Risposta);
 end;
 
 function TStoricoTurni.PerLLM: string;

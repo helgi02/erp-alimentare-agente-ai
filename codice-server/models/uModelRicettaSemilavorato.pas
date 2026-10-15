@@ -10,15 +10,25 @@ uses
   DbU;
 
 type
-  // Testata di una versione di ricetta di semilavorato (ricette_semilavorati). Le ricette
-  // sono versionate: una modifica non aggiorna la riga ma ne crea una con Versione
-  // incrementata. ValidaAl = NULL e' la versione corrente (al massimo una per semilavorato,
-  // indice unico parziale idx_ricetta_semilavorato_corrente, WHERE valida_al IS NULL).
-  // ValidaAl usa 0 (30/12/1899, data che non comparira' mai) come sentinella per NULL, come
-  // gli ID (0 = non salvato).
-  // Il versionamento serve al richiamo, che deve ricostruire quale ricetta era in vigore
-  // alla produzione di un lotto (lotti_semilavorati.ricetta_id punta a una versione).
-  // Aggiornare in place romperebbe lo storico.
+  // Rappresenta la testata di una versione di ricetta di un semilavorato
+  // (tabella ricette_semilavorati). Le ricette sono VERSIONATE: ogni
+  // modifica non aggiorna la riga esistente, ne crea una nuova con
+  // Versione incrementata. ValidaAl = NULL identifica la versione
+  // CORRENTE; il DB garantisce con un indice unico parziale
+  // (idx_ricetta_semilavorato_corrente, WHERE valida_al IS NULL) che ce
+  // ne sia al massimo una per semilavorato.
+  //
+  // ValidaAl usa 0 (TDateTime "vuoto") come sentinella per NULL: non e'
+  // un valore di data ambiguo perche' 0 corrisponde al 30/12/1899, una
+  // data che non si presentera' mai in questo dominio. E' lo stesso
+  // criterio gia' usato per gli ID (0 = non ancora salvato).
+  //
+  // Perche' il versionamento conta per il progetto: lo scenario di
+  // ritiro/richiamo deve poter ricostruire ESATTAMENTE quale ricetta era
+  // in vigore quando un dato lotto e' stato prodotto (vedi
+  // lotti_semilavorati.ricetta_id, che punta a una versione specifica,
+  // non genericamente al semilavorato). Aggiornare la ricetta esistente
+  // in place romperebbe questa tracciabilita' storica.
   TRicettaSemilavorato = class
   private
     FID: Integer;
@@ -45,9 +55,12 @@ type
     property CreatoDa: string read FCreatoDa write FCreatoDa;
     property Note: string read FNote write FNote;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ricette_semilavorati_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TRicettaSemilavorato;
     class function GetCorrente(ASemilavoratoID: Integer): TRicettaSemilavorato;
     class function GetByVersione(ASemilavoratoID, AVersione: Integer): TRicettaSemilavorato;
@@ -59,11 +72,13 @@ type
     function ToJSONObject: TJSONObject;
     procedure FromJSONObject(AJSON: TJSONObject);
 
-    // Crea atomicamente una nuova versione corrente: chiude (ValidaAl = CURRENT_DATE) la
-    // corrente e inserisce la nuova con Versione incrementata e ValidaAl = NULL, in una
-    // transazione (TDB.ExecuteQueriesInTransaction): altrimenti un errore a meta'
-    // lascerebbe il semilavorato senza versione corrente. E' il modo per modificare una
-    // ricetta, non Insert.
+    // Crea atomicamente una nuova versione corrente: chiude (ValidaAl =
+    // CURRENT_DATE) l'eventuale versione corrente esistente e ne inserisce
+    // una nuova con Versione incrementata e ValidaAl = NULL. Le due
+    // operazioni vanno in un'unica transazione (TDB.ExecuteQueriesInTransaction):
+    // senza atomicita', un fallimento a meta' potrebbe lasciare il
+    // semilavorato SENZA alcuna versione corrente. E' il modo corretto —
+    // non Insert — per introdurre una modifica alla ricetta.
     class function CreaNuovaVersione(ASemilavoratoID: Integer;
       const ACreatoDa, ANote: string): TRicettaSemilavorato;
 
@@ -76,6 +91,8 @@ const
     'SELECT id, semilavorato_id, versione, valida_dal, valida_al, ' +
     'creato_da, note, creato_il, aggiornato_il ' +
     'FROM ricette_semilavorati ';
+
+{ TRicettaSemilavorato }
 
 constructor TRicettaSemilavorato.Create;
 begin
@@ -133,8 +150,9 @@ class function TRicettaSemilavorato.GetCorrente(ASemilavoratoID: Integer): TRice
 var
   LAutoQuery: TAutoQuery;
 begin
-  // valida_al IS NULL e' un letterale SQL: ":x IS NULL" con parametro NULL non e' portabile
-  // in FireDAC/PostgreSQL.
+  // valida_al IS NULL e' un letterale in SQL, non un parametro: non si
+  // puo' fare ":x IS NULL" con parametro NULL in modo portabile via
+  // FireDAC/PostgreSQL, quindi lo scriviamo direttamente nel testo.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -178,7 +196,8 @@ var
   LAutoQuery: TAutoQuery;
   LRicetta: TRicettaSemilavorato;
 begin
-  // Tutte le versioni, dalla piu' vecchia: l'evoluzione della ricetta.
+  // Tutte le versioni di un semilavorato, dalla piu' vecchia alla piu'
+  // recente: utile per ricostruire l'evoluzione della ricetta nel tempo.
   Result := TObjectList<TRicettaSemilavorato>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -200,8 +219,13 @@ end;
 
 class function TRicettaSemilavorato.Delete(AID: Integer): Boolean;
 begin
-  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
-  // perdere dati di tracciabilita'.
+  // Una ricetta e' referenziata da ricette_semilavorati_righe e da
+  // lotti_semilavorati.ricetta_id: in assenza di ON DELETE CASCADE lato
+  // DB, la query fallisce se la ricetta ha righe o e' gia' stata usata
+  // per produrre un lotto. Comportamento voluto: una versione di ricetta
+  // e' un dato storico/di tracciabilita', non va cancellata una volta
+  // utilizzata. Per "ritirarla" dall'uso corrente si usa
+  // CreaNuovaVersione, non Delete.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ricette_semilavorati WHERE id = :id', [AID]);
 end;
@@ -211,8 +235,12 @@ var
   LAutoQuery: TAutoQuery;
   LValidaAlParam: Variant;
 begin
-  // Solo per la primissima versione, quando non c'e' una corrente da chiudere. Per
-  // modificare usare CreaNuovaVersione. creato_il/aggiornato_il: DEFAULT del database.
+  // Da usare SOLO per la primissima versione di una ricetta (quando non
+  // esiste ancora nessuna versione corrente da chiudere). Per introdurre
+  // una modifica a una ricetta gia' esistente usare CreaNuovaVersione,
+  // che gestisce l'atomicita' chiusura+apertura.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()).
   if FValidaAl = 0 then
     LValidaAlParam := Null
   else
@@ -240,8 +268,11 @@ var
   LAutoQuery: TAutoQuery;
   LValidaAlParam: Variant;
 begin
-  // Aggiorna i campi non di versionamento (creato_da, note) o corregge le date a mano. Per
-  // una nuova versione usare CreaNuovaVersione. aggiornato_il lo imposta il trigger.
+  // Aggiorna i campi non di versionamento (creato_da, note) o, se
+  // necessario, corregge manualmente le date. Per il flusso normale di
+  // "nuova versione" si usa CreaNuovaVersione, non Update.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ricette_semilavorati_aggiornato_il lo valorizza automaticamente.
   if FValidaAl = 0 then
     LValidaAlParam := Null
   else
@@ -286,8 +317,10 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // id, versione, valida_al e audit non si leggono dal payload: il versionamento e' di
-  // CreaNuovaVersione.
+  // id, versione, valida_al, creato_il, aggiornato_il NON vengono letti
+  // dal payload in ingresso: il versionamento e' gestito da
+  // CreaNuovaVersione, non da un client che scrive direttamente questi
+  // campi.
   if AJSON.TryGetValue<Integer>('semilavorato_id', LValInt) then
     FSemilavoratoID := LValInt;
   if AJSON.TryGetValue<string>('valida_dal', LValStr) then
@@ -315,8 +348,9 @@ begin
 
     if Assigned(LCorrente) then
     begin
-      // Chiude la corrente e apre la nuova in una transazione. CURRENT_DATE e' un letterale
-      // SQL, deterministico.
+      // Chiude la versione corrente esistente e apre la nuova in
+      // un'unica transazione. CURRENT_DATE e' un letterale SQL, non un
+      // parametro: e' deterministico e non richiede binding.
       SetLength(LQueries, 2);
       SetLength(LParamsList, 2);
 
@@ -333,7 +367,8 @@ begin
     end
     else
     begin
-      // Nessuna versione corrente da chiudere: basta un Insert.
+      // Nessuna versione corrente da chiudere: e' la primissima ricetta
+      // di questo semilavorato, un semplice Insert basta.
       Result := TRicettaSemilavorato.Create;
       Result.SemilavoratoID := ASemilavoratoID;
       Result.Versione := LNuovaVersione;
@@ -346,8 +381,10 @@ begin
     LCorrente.Free;
   end;
 
-  // Ricarica lo stato scritto (a transazione gia' committata), incluso il valida_dal di
-  // default.
+  // Ricarica dal DB lo stato appena scritto (fuori dalla transazione,
+  // che a questo punto e' gia' stata commitata): garantisce che
+  // l'oggetto restituito rifletta esattamente cio' che e' stato
+  // persistito, incluso il valida_dal di default del DB.
   Result := GetCorrente(ASemilavoratoID);
 end;
 

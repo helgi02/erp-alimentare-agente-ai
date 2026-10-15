@@ -9,10 +9,15 @@ uses
   DbU;
 
 type
-  // Testata di un ordine di acquisto (ordini_fornitori). Stato gestito dall'applicazione
-  // (il DB ha solo un CHECK sui valori): 'inviato' -> 'confermato' -> 'ricevuto', oppure
-  // 'annullato' da uno stato precedente. Il collegamento ai DDT di entrata non ha una FK,
-  // e' tracciato a livello di processo.
+  // Rappresenta la testata di un ordine di acquisto verso un fornitore
+  // (tabella ordini_fornitori). Stato macchina a stati finiti gestito
+  // interamente lato applicazione (il DB lo vincola solo con un CHECK
+  // sui valori ammessi, non con transizioni): 'inviato' -> 'confermato'
+  // -> 'ricevuto', oppure 'annullato' da uno qualsiasi degli stati
+  // precedenti. Un ordine 'ricevuto' e' collegato, tramite le sue righe
+  // (ordini_fornitori_righe), ai DDT di entrata che ne hanno consegnato
+  // la merce — ma lo schema non forza questo collegamento con una FK
+  // diretta, e' una relazione tracciata a livello di processo.
   TOrdineFornitore = class
   private
     FID: Integer;
@@ -36,9 +41,12 @@ type
     property Stato: string read FStato write FStato;
     property Note: string read FNote write FNote;
 
+    // Campi di audit: sola lettura, gestiti dal database (default/trigger
+    // trg_ordini_fornitori_aggiornato_il)
     property CreatoIl: TDateTime read FCreatoIl;
     property AggiornatoIl: TDateTime read FAggiornatoIl;
 
+    // Operazioni CRUD
     class function GetByID(AID: Integer): TOrdineFornitore;
     class function GetByNumero(const ANumeroOrdine: string): TOrdineFornitore;
     class function GetAll: TObjectList<TOrdineFornitore>;
@@ -62,8 +70,12 @@ const
     'creato_il, aggiornato_il ' +
     'FROM ordini_fornitori ';
 
-  // Valori di chk_stato_ordine_fornitore, validati qui prima del DB.
+  // Valori ammessi da chk_stato_ordine_fornitore: replicati qui per
+  // validare lato Delphi prima di arrivare al DB (stesso principio delle
+  // altre EnsureXxxValido di questo progetto).
   STATI_VALIDI: array[0..3] of string = ('inviato', 'confermato', 'ricevuto', 'annullato');
+
+{ TOrdineFornitore }
 
 constructor TOrdineFornitore.Create;
 begin
@@ -126,7 +138,9 @@ class function TOrdineFornitore.GetByNumero(const ANumeroOrdine: string): TOrdin
 var
   LAutoQuery: TAutoQuery;
 begin
-  // numero_ordine e' UNIQUE globale (i DDT lo sono solo per fornitore).
+  // numero_ordine ha un vincolo UNIQUE globale (a differenza dei DDT,
+  // dove l'unicita' era solo per fornitore): un solo ordine con questo
+  // numero puo' esistere in tutto il sistema.
   Result := nil;
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -193,7 +207,8 @@ var
   LAutoQuery: TAutoQuery;
   LOrdine: TOrdineFornitore;
 begin
-  // Es. gli ordini 'inviato' o 'confermato' in attesa di consegna.
+  // Utile ad esempio per elencare gli ordini ancora 'inviato' o
+  // 'confermato' in attesa di consegna.
   Result := TObjectList<TOrdineFornitore>.Create(True);
 
   LAutoQuery := TDB.GetInstance.getQueryResult(
@@ -214,8 +229,10 @@ end;
 
 class function TOrdineFornitore.Delete(AID: Integer): Boolean;
 begin
-  // Fallisce se il record e' referenziato (nessun ON DELETE CASCADE): voluto, per non
-  // perdere dati di tracciabilita'.
+  // Un ordine fornitore e' referenziato da ordini_fornitori_righe: in
+  // assenza di ON DELETE CASCADE lato DB, la query fallisce se l'ordine
+  // ha gia' righe. Comportamento voluto: usare stato = 'annullato'
+  // invece di cancellare un ordine gia' inserito.
   Result := TDB.GetInstance.executeQuery(
     'DELETE FROM ordini_fornitori WHERE id = :id', [AID]);
 end;
@@ -226,8 +243,10 @@ var
 begin
   EnsureStatoValido;
 
-  // creato_il/aggiornato_il: DEFAULT del database. Un duplicato sul vincolo UNIQUE solleva
-  // un'eccezione da gestire nel controller.
+  // creato_il e aggiornato_il NON compaiono tra i campi inseriti: sono
+  // valorizzati dal DEFAULT del database (now()). numero_ordine ha un
+  // vincolo UNIQUE: un duplicato solleva un'eccezione da gestire a
+  // livello di controller.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'INSERT INTO ordini_fornitori (numero_ordine, data_ordine, fornitore_id, stato, note) ' +
     'VALUES (:numero_ordine, :data_ordine, :fornitore_id, :stato, :note) ' +
@@ -249,7 +268,8 @@ var
 begin
   EnsureStatoValido;
 
-  // aggiornato_il lo imposta il trigger.
+  // aggiornato_il NON viene impostato esplicitamente: il trigger
+  // trg_ordini_fornitori_aggiornato_il lo valorizza automaticamente.
   LAutoQuery := TDB.GetInstance.getQueryResult(
     'UPDATE ordini_fornitori SET numero_ordine = :numero_ordine, ' +
     'data_ordine = :data_ordine, fornitore_id = :fornitore_id, ' +
@@ -295,7 +315,8 @@ var
   LValInt: Integer;
   LValStr: string;
 begin
-  // Id e audit non si leggono dal payload: li gestisce il database.
+  // id, creato_il, aggiornato_il NON vengono letti dal payload in
+  // ingresso: sono gestiti dal database, mai dal client
   if AJSON.TryGetValue<string>('numero_ordine', LValStr) then
     FNumeroOrdine := LValStr;
   if AJSON.TryGetValue<string>('data_ordine', LValStr) then

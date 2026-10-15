@@ -13,10 +13,17 @@ uses
   uModelAllergene;
 
 type
-  // Lettura dell'anagrafica semilavorati (elenco, singolo, allergeni sotto
-  // /($id)/allergeni), senza Create/Update/Delete: serve solo la visualizzazione. Il model
-  // TSemilavorato ha gia' Insert/Update/Delete/SetAllergeni, quindi la scrittura si
-  // aggiunge copiando TControllerProdottiFiniti.
+  // Controller di sola lettura per l'anagrafica semilavorati (tabella
+  // anagrafiche_semilavorati). Stessa forma di TControllerMateriePrime/
+  // TControllerProdottiFiniti (elenco, singolo, allergeni nidificati sotto
+  // /($id)/allergeni), ma SENZA Create/Update/Delete: la richiesta che ha
+  // originato questo controller era "visualizzare la lista dei prodotti,
+  // semilavorati e ricette, e il get del singolo di ogni entita'" - solo
+  // lettura, appunto. Il model TSemilavorato ha gia' tutto cio' che
+  // servirebbe per la scrittura (Insert/Update/Delete/SetAllergeni): se
+  // in futuro serve anche l'anagrafica scrivibile da frontend, aggiungere
+  // qui gli endpoint POST/PUT/DELETE e' un mirror immediato di
+  // TControllerProdottiFiniti, non richiede toccare il model.
   [MVCPath('/api/semilavorati')]
   TControllerSemilavorati = class(TMVCController)
   public
@@ -34,6 +41,8 @@ type
   end;
 
 implementation
+
+{ TControllerSemilavorati }
 
 procedure TControllerSemilavorati.GetAll(ctx: TWebContext);
 var

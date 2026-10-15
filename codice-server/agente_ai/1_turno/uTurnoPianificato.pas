@@ -1,28 +1,80 @@
 unit uTurnoPianificato;
 
-// Turno con il pianificatore. Il turno resta quello di TServizioAgente (stesso stato,
-// protocollo a passi e diagnostica); con [Orchestratore] Motore = 'pianificatore' le
-// decisioni di ogni passo le prende questa unit.
-// Fasi (ogni passo del protocollo = al massimo una chiamata al modello o un tool):
-// CONFERMA: solo se il turno precedente aspetta la conferma di una scrittura. Una chiamata
-// a risposta chiusa (conferma/annulla/altro) legge la risposta; il Planner non viene
-// chiamato.
-// PIANO: il Planner scrive il piano; poi, senza modello, il retrieval trova i tool
-// candidati per ogni azione.
-// COMPLETAMENTO: solo se restano passi astratti; il Completer sceglie tool e argomenti, poi
-// il codice normalizza, deduplica e valida il piano.
-// ESECUZIONE: un tool per passo, con i riferimenti risolti dal codice.
-// SINTESI: il modello racconta i dati letti o spiega un arresto.
-// Fine turno: piano non operativo (risposta del Planner), piano non valido (testo fisso),
-// scrittura da confermare (in_attesa_conferma), disambiguazione (in_attesa_scelta),
-// altrimenti sintesi del modello.
-// Registro: gli eventi del turno (chiamate al modello, piano, retrieval, controlli, tool,
-// risposta) vanno in logs/: pianificatore.log (leggibile), pianificatore_turni.csv
-// (metriche) e pianificatore_dettaglio.jsonl (tutto, prompt compresi). Un riassunto senza
-// prompt torna al client nel campo 'pianificatore'.
-// Storico: TArchivioStorici tiene per conversazione lo storico dei turni
-// (uStoricoTurni.pas) e l'eventuale scrittura in sospeso; a inizio turno se ne prende una
-// copia, a fine turno si aggiunge il turno.
+(* ============================================================================
+  IL TURNO CON IL PIANIFICATORE - tappe 9 e 11 del porting.
+  Porting di scripts/prototipo_pianificatore/pianificatore/orchestratore.py,
+  adattato al protocollo a passi del server, piu' la conferma delle scritture
+  gestita dal codice (tappa 9).
+
+  -- Come entra nel server -----------------------------------------------------
+  Il turno resta quello di TServizioAgente (uServiziAgente.pas): stesso
+  TStatoTurno, stesso protocollo con il client (POST /api/ai/turni, poi un
+  POST /api/ai/turni/passo per volta), stessa diagnostica. Cambia CHI decide
+  cosa fare a ogni passo: quando il motore scelto e' "pianificatore"
+  ([Orchestratore] Motore nell'ini), TServizioAgente passa la mano a questa
+  unit; con "ciclo" tutto resta com'era. I due motori convivono per poterli
+  confrontare sulle stesse conversazioni.
+
+  -- Le fasi (un passo del protocollo = al massimo una chiamata al modello o
+     un tool) ---------------------------------------------------------------------
+    CONFERMA       solo se il turno precedente aspetta la conferma di una
+                   scrittura: una chiamata a risposta chiusa (conferma /
+                   annulla / altro) legge la risposta dell'utente. Il Planner
+                   NON viene chiamato.
+                     conferma -> si riprende il piano salvato dal passo che
+                                 era fermo, con gli stessi argomenti;
+                     annulla  -> testo fisso, niente viene modificato;
+                     altro    -> il turno prosegue come un turno normale.
+    PROPOSTA       solo se la risposta del turno precedente finiva con una
+                   domanda-proposta ("Vuoi che prepari le email?") e il
+                   messaggio dell'utente e' breve. Vale per QUALSIASI
+                   proposta, di qualunque scenario: si ricava dal testo della
+                   risposta, non dal tool. Un "si'/no" inequivocabile si
+                   riconosce senza modello, il resto con una chiamata a
+                   risposta chiusa (accetta / rifiuta / altro).
+                     accetta  -> il Planner riceve la proposta in chiaro
+                                 ("l'utente accetta: <proposta>") invece di
+                                 un "si'" senza contesto;
+                     rifiuta  -> testo fisso, turno concluso;
+                     altro    -> il turno prosegue come un turno normale.
+    PIANO          il Planner scrive il piano; subito dopo, senza modello, il
+                   retrieval trova i tool candidati per ogni azione.
+    COMPLETAMENTO  solo se restano passi astratti: il Completer sceglie tool
+                   e argomenti. Poi, senza modello: normalizzazione, deduplica
+                   e validazione del piano intero.
+    ESECUZIONE     un tool per passo, con i riferimenti risolti dal codice.
+    SINTESI        il modello racconta i dati letti (o spiega un arresto).
+
+  -- Come puo' finire un turno ------------------------------------------------------
+    piano non operativo      risposta del Planner
+    piano non valido         testo fisso, niente eseguito
+    scrittura da confermare  testo fisso, stato in_attesa_conferma
+    disambiguazione          testo fisso, stato in_attesa_scelta
+    tutto il resto           sintesi del modello (anche per errore di un
+                             tool, nessun elemento trovato, passo non coperto)
+
+  -- Il registro (tappa 12: diagnostica) ---------------------------------------------
+  Tutto cio' che succede in un turno viene annotato come una sequenza di
+  EVENTI, nell'ordine in cui avvengono: ogni chiamata al modello (fase,
+  token, durata, messaggi inviati, testo ricevuto), il piano, il retrieval
+  (candidati e punteggi di ogni passo), i controlli (normalizzazioni ed
+  errori di validazione), ogni tool eseguito (argomenti risolti, esito,
+  durata, risultato), la risposta. A fine turno il registro finisce in tre
+  file nella cartella logs accanto all'eseguibile:
+    pianificatore.log              leggibile, per seguire un turno a occhio
+    pianificatore_turni.csv        una riga per turno, con le metriche
+    pianificatore_dettaglio.jsonl  un oggetto JSON per turno, con tutto
+                                   (compresi i prompt): per ricostruire a
+                                   posteriori perche' un turno e' andato cosi'
+  Un riassunto degli eventi (senza i prompt) va anche nella risposta al
+  client, nel campo "pianificatore".
+
+  -- Lo storico ----------------------------------------------------------------------
+  TArchivioStorici tiene, per conversazione, lo storico dei turni
+  (uStoricoTurni.pas) e l'eventuale scrittura in sospeso. All'inizio del
+  turno se ne prende una COPIA (testo per il Planner, tool noti, sospeso);
+  alla fine si aggiunge il turno. Nessun oggetto dell'archivio esce dal lock.
+  ============================================================================ *)
 
 interface
 
@@ -41,7 +93,7 @@ uses
   TextFileWriterU;
 
 type
-  TFasePianificatore = (fpConferma, fpPiano, fpCompletamento, fpEsecuzione, fpSintesi, fpConcluso);
+  TFasePianificatore = (fpConferma, fpProposta, fpPiano, fpCompletamento, fpEsecuzione, fpSintesi, fpConcluso);
 
   TArchivioStorici = class
   private
@@ -55,10 +107,15 @@ type
   public
     class constructor Create;
     class destructor Destroy;
-    // Copia di cio' che serve a un turno. ASospeso e' del chiamante (nil = nessuna
-    // scrittura in attesa). Restituisce il numero di turni.
+    // Copia di cio' che serve a un turno. ASospeso e' del chiamante (nil se
+    // non c'e' una scrittura in attesa). Restituisce quanti turni ci sono.
     class function Istantanea(const AID: string; out AStoricoTesto: string;
       out AToolNoti: TArray<string>; out ASospeso: TJSONObject): Integer;
+    // Testo della proposta lasciata dall'ultimo turno ('' se non c'e').
+    class function PropostaAperta(const AID: string): string;
+    // Copia della voce {"id","tool","argomenti","esito",...} del passo AIdPasso
+    // dell'ULTIMO turno, se e' andato a buon fine; altrimenti nil. Del chiamante.
+    class function PassoPrecedente(const AID: string; AIdPasso: Integer): TJSONObject;
     // Aggiunge il turno concluso. ATurno e ASospeso passano all'archivio
     // (ASospeso = nil cancella la scrittura in sospeso).
     class procedure Registra(const AID: string; ATurno: TTurnoStorico; ASospeso: TJSONObject);
@@ -66,7 +123,7 @@ type
     class function EsitiPerStorico(AEsecuzione: TEsitoEsecuzione): TJSONArray;
   end;
 
-  // I tre file del registro (vedi l'intestazione).
+  // I tre file del registro (vedi il commento in testa alla unit).
   TRegistroPianificatore = class
   private
     class var FLog: TTextFileWriter;
@@ -85,6 +142,12 @@ type
   TTurnoPianificato = class
   private
     FDomanda: string;
+    // La domanda che vedono Planner, validatore e sintesi. Di norma e' FDomanda;
+    // se l'utente ha accettato una proposta dell'assistente e' la proposta in
+    // chiaro (FDomanda resta quella scritta dall'utente: va nello storico e nei log).
+    FDomandaEff: string;
+    // Proposta lasciata dal turno precedente ('' se non c'e').
+    FProposta: string;
     FOggi: string;
     FFase: TFasePianificatore;
     FChiamateLLM: Integer;
@@ -123,8 +186,10 @@ type
     procedure Chiudi(AStato: TStatoTurno; const ARisposta, AStatoTurno, AEtichetta: string);
     procedure ChiudiNonValido(AStato: TStatoTurno; const ACodice, AMessaggio: string);
     procedure ControllaPiano(AStato: TStatoTurno);
+    procedure RipristinaPassiPrecedenti(AStato: TStatoTurno);
     procedure AggiungiTraccia(AStato: TStatoTurno; AEsito: TEsitoPasso);
     procedure PassoConferma(AStato: TStatoTurno);
+    procedure PassoProposta(AStato: TStatoTurno);
     procedure PassoPiano(AStato: TStatoTurno);
     procedure PassoCompletamento(AStato: TStatoTurno);
     procedure PassoEsecuzione(AStato: TStatoTurno);
@@ -149,6 +214,8 @@ implementation
 uses
   System.DateUtils,
   System.Diagnostics,
+  System.StrUtils,
+  System.RegularExpressions,
   uSchemaJSON,
   uContrattiTool,
   uSintesiRisposta,
@@ -157,7 +224,7 @@ uses
   uLog;
 
 const
-  TTL_STORICO_MINUTI = 60;
+  TTL_STORICO_MINUTI = 60;     // come le conversazioni dell'orchestratore attuale
 
   SISTEMA_CONFERMA =
     'Il gestionale ha proposto all''utente un''operazione e gli ha chiesto conferma. ' +
@@ -166,9 +233,24 @@ const
     '- annulla: la rifiuta ("no", "annulla", "lascia stare");'#10 +
     '- altro: chiede di cambiare qualcosa, fa una domanda o parla d''altro.'#10;
 
+  SISTEMA_PROPOSTA =
+    'Il gestionale ha posto all''utente una domanda in cui propone di fare qualcosa. ' +
+    'Classifica la risposta dell''utente:'#10 +
+    '- accetta: acconsente alla proposta cosi'' com''e'' ("si", "ok", "va bene", "certo", "fallo");'#10 +
+    '- rifiuta: la rifiuta ("no", "lascia stare", "non serve");'#10 +
+    '- altro: chiede altro, cambia qualcosa, risponde con un dato, fa una domanda, ' +
+    'oppure la domanda del gestionale non proponeva alcuna azione ' +
+    '(per esempio "Come posso aiutarti?").'#10;
+
+  SCHEMA_PROPOSTA =
+    '{"type":"object","properties":{"scelta":{"type":"string",' +
+    '"enum":["accetta","rifiuta","altro"]}},"required":["scelta"]}';
+
   SCHEMA_CONFERMA =
     '{"type":"object","properties":{"scelta":{"type":"string",' +
     '"enum":["conferma","annulla","altro"]}},"required":["scelta"]}';
+
+{ TArchivioStorici }
 
 class constructor TArchivioStorici.Create;
 begin
@@ -233,6 +315,39 @@ begin
   end;
 end;
 
+class function TArchivioStorici.PropostaAperta(const AID: string): string;
+var
+  LStorico: TStoricoTurni;
+begin
+  Result := '';
+  FLock.Acquire;
+  try
+    if FStorici.TryGetValue(AID, LStorico) then
+      Result := LStorico.PropostaAperta;
+  finally
+    FLock.Release;
+  end;
+end;
+
+class function TArchivioStorici.PassoPrecedente(const AID: string; AIdPasso: Integer): TJSONObject;
+var
+  LStorico: TStoricoTurni;
+  LVoce: TJSONValue;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    if FStorici.TryGetValue(AID, LStorico) and (LStorico.Ultimo <> nil) then
+      for LVoce in LStorico.Ultimo.Esiti do
+        if (LVoce is TJSONObject) and
+           (TestoCampo(TJSONObject(LVoce), 'id') = IntToStr(AIdPasso)) and
+           (TestoCampo(TJSONObject(LVoce), 'esito') = 'ok') then
+          Exit(LVoce.Clone as TJSONObject);
+  finally
+    FLock.Release;
+  end;
+end;
+
 class procedure TArchivioStorici.Registra(const AID: string; ATurno: TTurnoStorico;
   ASospeso: TJSONObject);
 var
@@ -268,6 +383,8 @@ begin
     LStorico.Free;
   end;
 end;
+
+{ TRegistroPianificatore }
 
 const
   INTESTAZIONE_CSV =
@@ -329,6 +446,8 @@ begin
   end;
 end;
 
+{ TTurnoPianificato }
+
 destructor TTurnoPianificato.Destroy;
 begin
   FRighe.Free;
@@ -351,6 +470,7 @@ begin
   LTurno := TTurnoPianificato.Create;
   AStato.Pianificatore := LTurno;      // da qui lo libera TStatoTurno
   LTurno.FDomanda := ADomanda;
+  LTurno.FDomandaEff := ADomanda;
   LTurno.FOggi := FormatDateTime('yyyy-mm-dd', Date);
   LTurno.FStatoTurno := STATO_CONCLUSO;
   LTurno.FEtichetta := ESECUZIONE_NON_ESEGUITA;
@@ -367,7 +487,16 @@ begin
   if LTurno.FSospeso <> nil then
     LTurno.FFase := fpConferma
   else
+  begin
     LTurno.FFase := fpPiano;
+    // Proposta dell'assistente rimasta senza risposta (vedi uStoricoTurni):
+    // se l'utente risponde con poche parole, prima si capisce se ha accettato.
+    LTurno.FProposta := TArchivioStorici.PropostaAperta(AStato.Esito.ConversationID);
+    if (LTurno.FProposta <> '') and MessaggioBreve(ADomanda) then
+      LTurno.FFase := fpProposta
+    else
+      LTurno.FProposta := '';
+  end;
 
   TLog.Write(Format('AGENTE - turno %d avviato [%s] turno_id=%s, motore: pianificatore',
     [AStato.NumeroTurno, AStato.Esito.ConversationID, AStato.TurnoID]));
@@ -377,6 +506,7 @@ class function TTurnoPianificato.DescriviFase(AStato: TStatoTurno): string;
 begin
   case TTurnoPianificato(AStato.Pianificatore).FFase of
     fpConferma:      Result := 'Leggo la tua risposta';
+    fpProposta:      Result := 'Leggo la tua risposta';
     fpPiano:         Result := 'Sto preparando il piano';
     fpCompletamento: Result := 'Scelgo gli strumenti da usare';
     fpEsecuzione:    Result := 'Sto eseguendo le operazioni';
@@ -393,6 +523,7 @@ begin
   LTurno := TTurnoPianificato(AStato.Pianificatore);
   case LTurno.FFase of
     fpConferma:      LTurno.PassoConferma(AStato);
+    fpProposta:      LTurno.PassoProposta(AStato);
     fpPiano:         LTurno.PassoPiano(AStato);
     fpCompletamento: LTurno.PassoCompletamento(AStato);
     fpEsecuzione:    LTurno.PassoEsecuzione(AStato);
@@ -558,8 +689,10 @@ begin
     .AddPair('passi', LPassi), LRiga);
 end;
 
-// Chiama il modello con ARichiesta (liberata qui) e ne restituisce il testo. Registra
-// token, durata e chiamata completa nel registro. Un ELLMErrore sale al controller.
+// Chiama il modello con ARichiesta (che viene liberata qui) e restituisce il
+// testo della risposta. Registra token e durata nella diagnostica del turno
+// e l'intera chiamata (messaggi inviati, testo ricevuto) nel registro.
+// Un errore del motore (ELLMErrore) sale al controller, come nel ciclo.
 function TTurnoPianificato.ChiamaLLM(AStato: TStatoTurno; ARichiesta: TJSONObject;
   const AFase: string): string;
 var
@@ -635,11 +768,14 @@ begin
     FErrori := FErrori + [LErrore];
   end;
   TLog.Write('AGENTE - piano non valido: ' + ACodice + ' ' + AMessaggio);
-  Chiudi(AStato, TSintesiRisposta.TestoPianoNonValido, STATO_CONCLUSO, ESECUZIONE_NON_ESEGUITA);
+  // Se manca un codice che l'utente doveva dare, il testo lo dice (vedi
+  // TSintesiRisposta.TestoPianoNonValidoPer); altrimenti resta quello generico.
+  Chiudi(AStato, TSintesiRisposta.TestoPianoNonValidoPer(FErrori), STATO_CONCLUSO,
+    ESECUZIONE_NON_ESEGUITA);
 end;
 
-// Traccia per il client e la batteria di test: un tool chiamato davvero, con il risultato
-// nella forma che il frontend conosce.
+// Traccia per il client (ispettore della chat) e per la batteria di test: un
+// tool chiamato davvero, con il risultato nella forma che il frontend conosce.
 procedure TTurnoPianificato.AggiungiTraccia(AStato: TStatoTurno; AEsito: TEsitoPasso);
 var
   LTraccia: TTracciaTool;
@@ -704,8 +840,9 @@ var
 begin
   LTool := TestoCampo(FSospeso, 'tool');
 
-  // Risposta data con i pulsanti della chat: la scelta e' certa, nessuna chiamata al
-  // modello. Con testo libero resta la chiamata a risposta chiusa.
+  // Risposta data con i pulsanti della chat (vedi TOpzioniTurno.SceltaConferma):
+  // la scelta e' gia' certa, quindi nessuna chiamata al modello. Con il testo
+  // libero resta la chiamata a risposta chiusa (conferma / annulla / altro).
   if AStato.Opzioni.SceltaConferma <> '' then
   begin
     LSceltaTesto := AStato.Opzioni.SceltaConferma;
@@ -764,8 +901,9 @@ begin
     Exit;
   end;
 
-  // Conferma: si riprende dal passo fermo, con i risultati dei passi gia' eseguiti. Gli
-  // argomenti sono ricalcolati dagli stessi risultati, quindi uguali a quelli mostrati.
+  // Conferma: si riprende dal passo che era fermo, con i risultati dei passi
+  // gia' eseguiti allora. Gli argomenti sono quelli mostrati all'utente,
+  // perche' vengono ricalcolati dagli stessi risultati.
   FEsecutore := TEsecutorePiano.Create(FPiano);
   LOutput := FSospeso.GetValue('output');
   if LOutput is TJSONObject then
@@ -774,6 +912,83 @@ begin
     FEsecutore.RiprendiDa(StrToIntDef(TestoCampo(FSospeso, 'indice_passo'), 0), nil);
   FEsecutore.ToolConfermato := LTool;
   FFase := fpEsecuzione;
+end;
+
+// Il turno precedente ha chiuso con una proposta ("Vuoi che ...?") e l'utente
+// ha risposto con poche parole. Si capisce se ha accettato, rifiutato o detto
+// altro. E' la stessa idea della conferma di una scrittura, ma vale per
+// qualsiasi proposta dell'assistente.
+procedure TTurnoPianificato.PassoProposta(AStato: TStatoTurno);
+var
+  LRichiesta: TJSONObject;
+  LMessaggi: TJSONArray;
+  LRisposta, LScelta: TJSONValue;
+  LTesto, LSceltaTesto, LMetodo: string;
+begin
+  LSceltaTesto := 'altro';
+  case RispostaSecca(FDomanda) of
+    1:  LSceltaTesto := 'accetta';
+    -1: LSceltaTesto := 'rifiuta';
+  end;
+
+  if LSceltaTesto <> 'altro' then
+    LMetodo := 'parole'            // "si'", "no": nessuna chiamata al modello
+  else
+  begin
+    LMetodo := 'modello';
+    LMessaggi := TJSONArray.Create;
+    LMessaggi.AddElement(TJSONObject.Create
+      .AddPair('role', 'system').AddPair('content', SISTEMA_PROPOSTA));
+    LMessaggi.AddElement(TJSONObject.Create
+      .AddPair('role', 'user')
+      .AddPair('content',
+        'DOMANDA DEL GESTIONALE: ' + FProposta + #10 +
+        'RISPOSTA DELL''UTENTE: ' + FDomanda));
+    LRichiesta := TJSONObject.Create;
+    LRichiesta.AddPair('messages', LMessaggi);
+    LRichiesta.AddPair('schema_risposta', TJSONObject.Create
+      .AddPair('nome', 'proposta')
+      .AddPair('schema', TJSONObject.ParseJSONValue(SCHEMA_PROPOSTA)));
+
+    LTesto := ChiamaLLM(AStato, LRichiesta, 'proposta');
+    // Risposta illeggibile = "altro": il turno procede come un turno normale.
+    LRisposta := TJSONObject.ParseJSONValue(LTesto);
+    try
+      if LRisposta is TJSONObject then
+      begin
+        LScelta := TJSONObject(LRisposta).GetValue('scelta');
+        if (LScelta <> nil) and ((LScelta.Value = 'accetta') or (LScelta.Value = 'rifiuta')) then
+          LSceltaTesto := LScelta.Value;
+      end;
+    finally
+      LRisposta.Free;
+    end;
+  end;
+
+  TLog.Write(Format('AGENTE - risposta alla proposta "%s": %s (%s)', [FProposta, LSceltaTesto, LMetodo]));
+  Evento(TJSONObject.Create
+    .AddPair('tipo', 'proposta')
+    .AddPair('proposta', FProposta)
+    .AddPair('scelta', LSceltaTesto)
+    .AddPair('metodo', LMetodo),
+    Format('  PROPOSTA "%s": l''utente ha risposto "%s" (%s)', [FProposta, LSceltaTesto, LMetodo]));
+
+  if LSceltaTesto = 'rifiuta' then
+  begin
+    Chiudi(AStato, TSintesiRisposta.TestoPropostaRifiutata, STATO_CONCLUSO, ESECUZIONE_NON_ESEGUITA);
+    Exit;
+  end;
+
+  if LSceltaTesto = 'accetta' then
+    // Il Planner non riceve un "si'" senza contesto: riceve la proposta in
+    // chiaro, con la richiesta di eseguirla.
+    FDomandaEff := 'L''utente accetta la proposta che l''assistente gli ha fatto nel turno ' +
+      'precedente: "' + FProposta + '" Pianifica SOLO quella proposta, niente altro: ' +
+      'nessuna scrittura o invio che l''utente non ha chiesto. I dati del turno ' +
+      'precedente non si richiamano con riferimenti: se servono, il piano li rilegge ' +
+      'con un passo di sola lettura. ' +
+      'Messaggio dell''utente: ' + FDomanda;
+  FFase := fpPiano;
 end;
 
 procedure TTurnoPianificato.PassoPiano(AStato: TStatoTurno);
@@ -790,7 +1005,7 @@ var
   LDecisione: TDecisionePasso;
   LNome: string;
 begin
-  LRichiesta := TPianificatore.RichiestaPiano(FStoricoTesto, FDomanda, FOggi, FToolNoti);
+  LRichiesta := TPianificatore.RichiestaPiano(FStoricoTesto, FDomandaEff, FOggi, FToolNoti);
   // I messaggi del Planner servono poi come prefisso al Completer.
   FMessaggiPiano := LRichiesta.GetValue('messages').Clone as TJSONArray;
   LTesto := ChiamaLLM(AStato, LRichiesta, 'piano');
@@ -835,8 +1050,8 @@ begin
   LNonCoperti := FRetrieval.NonCoperti;
   if Length(LNonCoperti) > 0 then
   begin
-    // Per almeno un'azione manca un tool: non si esegue niente e il modello spiega cosa non
-    // si puo' fare.
+    // Per almeno un'azione il gestionale non ha un tool: non si esegue
+    // niente e il modello spiega all'utente cosa non si puo' fare.
     LPassi := TJSONArray.Create;
     LAzioni := TJSONArray.Create;
     for LId in LNonCoperti do
@@ -877,8 +1092,8 @@ begin
   for LVoce in LCandidati do
     FCompletati := FCompletati + [LVoce.Id];
 
-  // ChiamaLLM libera la richiesta: se ne tiene una copia, utile se serve chiedere una
-  // correzione.
+  // ChiamaLLM libera la richiesta: ne teniamo una copia, che serve solo se
+  // bisogna chiedere la correzione.
   LRichiesta := TPianificatore.RichiestaCompletamento(FMessaggiPiano, LCandidati);
   LCopia := LRichiesta.Clone as TJSONObject;
   try
@@ -898,9 +1113,10 @@ begin
       end;
     end;
 
-    // Due voci per lo stesso passo: il codice non sceglie. Si chiede UNA sola correzione al
-    // modello; se anche la seconda risposta non e' valida il turno si chiude con "piano non
-    // valido" senza eseguire tool.
+    // Due voci per lo stesso passo (tappa 13): il codice non sceglie fra le
+    // due. Si chiede al modello di correggersi UNA volta sola (niente
+    // cicli); se anche la seconda risposta non e' valida, il turno si chiude
+    // con il testo fisso "piano non valido" e nessun tool viene eseguito.
     if LProblema <> '' then
     begin
       LEvento := TJSONObject.Create;
@@ -930,6 +1146,133 @@ begin
 end;
 
 // Normalizzazione, deduplica e validazione: nessun modello, nessun tool.
+// Un piano puo' usare il risultato di un passo del turno PRECEDENTE ("$2.comunicazioni"
+// dove il 2 era un passo di quel turno): il Planner lo fa quando l'utente dice
+// "si'" a una proposta e i dati da usare sono in quel turno. Un riferimento
+// "$N" non puo' puntare fuori dal piano, quindi il passo del turno
+// precedente viene RIPETUTO in testa al piano, con gli stessi argomenti gia'
+// risolti (id e codici, non riferimenti). Solo passi di LETTURA e riusciti:
+// una scrittura non si ripete mai da sola. E' un rimedio generale, non legato
+// a un tool. Va chiamata prima della validazione, dopo la deduplica.
+procedure TTurnoPianificato.RipristinaPassiPrecedenti(AStato: TStatoTurno);
+const
+  MODELLO_RIF = '\$(\d+)(?=\.)';
+var
+  LMancanti: TList<Integer>;
+  LVecchi: TObjectList<TJSONObject>;
+  LPasso, LAltro, LNuovo: TPasso;
+  LMatch: TMatch;
+  LEsito: TJSONObject;
+  LContratto: TContrattoTool;
+  LDecisione: TDecisionePasso;
+  LN, K, i, j, LPos: Integer;
+  LTesto: string;
+  LPresente: Boolean;
+  LAggiunte: TArray<Integer>;
+  LTrovati: TMatchCollection;
+  m, LRif: Integer;
+  LNuovoRif: string;
+begin
+  LMancanti := TList<Integer>.Create;
+  LVecchi := TObjectList<TJSONObject>.Create(True);
+  try
+    // 1. Quali riferimenti puntano a un passo che nel piano non c'e'?
+    for LPasso in FPiano.Passi do
+      if LPasso.Argomenti <> nil then
+        for LMatch in TRegEx.Matches(LPasso.Argomenti.ToJSON, MODELLO_RIF) do
+        begin
+          LN := StrToInt(LMatch.Groups[1].Value);
+          LPresente := LMancanti.Contains(LN);
+          for LAltro in FPiano.Passi do
+            if LAltro.Id = LN then
+              LPresente := True;
+          if LPresente then
+            Continue;
+          LEsito := TArchivioStorici.PassoPrecedente(AStato.Esito.ConversationID, LN);
+          if LEsito = nil then
+            Continue;
+          if (not (LEsito.GetValue('argomenti') is TJSONObject)) or
+             (not TRegistroContrattiTool.Trova(TestoCampo(LEsito, 'tool'), LContratto)) or
+             (LContratto.Effetto <> etLettura) then
+          begin
+            LEsito.Free;
+            Continue;
+          end;
+          LMancanti.Add(LN);
+          LVecchi.Add(LEsito);
+        end;
+    K := LMancanti.Count;
+    if K = 0 then
+      Exit;
+
+    // 2. I passi del piano scalano di K posti; i riferimenti ai passi del
+    //    turno precedente puntano ai passi ripetuti (1..K), gli altri
+    //    scalano come i passi. Il passo ripetuto entra nelle dipendenze.
+    for LPasso in FPiano.Passi do
+    begin
+      Inc(LPasso.Id, K);
+      for j := 0 to High(LPasso.Dipendenze) do
+        Inc(LPasso.Dipendenze[j], K);
+      if LPasso.Argomenti = nil then
+        Continue;
+      LAggiunte := nil;
+      for LMatch in TRegEx.Matches(LPasso.Argomenti.ToJSON, MODELLO_RIF) do
+      begin
+        LPos := LMancanti.IndexOf(StrToInt(LMatch.Groups[1].Value));
+        if LPos >= 0 then
+          LAggiunte := LAggiunte + [LPos + 1];
+      end;
+      // Sostituzione a mano, dall'ultima occorrenza alla prima (TMatchEvaluator
+      // non accetta metodi anonimi): cosi' le posizioni restano valide.
+      LTesto := LPasso.Argomenti.ToJSON;
+      LTrovati := TRegEx.Matches(LTesto, MODELLO_RIF);
+      for m := LTrovati.Count - 1 downto 0 do
+      begin
+        LRif := StrToInt(LTrovati[m].Groups[1].Value);
+        LPos := LMancanti.IndexOf(LRif);
+        if LPos >= 0 then
+          LNuovoRif := '$' + IntToStr(LPos + 1)
+        else
+          LNuovoRif := '$' + IntToStr(LRif + K);
+        LTesto := Copy(LTesto, 1, LTrovati[m].Index - 1) + LNuovoRif +
+          Copy(LTesto, LTrovati[m].Index + LTrovati[m].Length, MaxInt);
+      end;
+      LPasso.Argomenti.Free;
+      LPasso.Argomenti := TJSONObject.ParseJSONValue(LTesto) as TJSONObject;
+      for j in LAggiunte do
+      begin
+        LPresente := False;
+        for i := 0 to High(LPasso.Dipendenze) do
+          if LPasso.Dipendenze[i] = j then
+            LPresente := True;
+        if not LPresente then
+          LPasso.Dipendenze := LPasso.Dipendenze + [j];
+      end;
+    end;
+    if FRetrieval <> nil then
+      for LDecisione in FRetrieval.Decisioni do
+        Inc(LDecisione.Id, K);
+    for j := 0 to High(FCompletati) do
+      Inc(FCompletati[j], K);
+
+    // 3. I passi ripetuti, in testa al piano.
+    for i := K - 1 downto 0 do
+    begin
+      LNuovo := TPasso.Create;
+      LNuovo.Id := i + 1;
+      LNuovo.Tool := TestoCampo(LVecchi[i], 'tool');
+      LNuovo.Azione := 'ripeto la lettura del turno precedente (' + LNuovo.Tool + ')';
+      LNuovo.Argomenti := LVecchi[i].GetValue('argomenti').Clone as TJSONObject;
+      FPiano.Passi.Insert(0, LNuovo);
+      FNote := FNote + [Format('passo %d: ripetuto dal turno precedente (era il passo %d, %s)',
+        [i + 1, LMancanti[i], LNuovo.Tool])];
+    end;
+  finally
+    LVecchi.Free;
+    LMancanti.Free;
+  end;
+end;
+
 procedure TTurnoPianificato.ControllaPiano(AStato: TStatoTurno);
 var
   LMappa: TDictionary<Integer, Integer>;
@@ -947,7 +1290,8 @@ begin
     if Length(LTolti) > 0 then
     begin
       FNote := FNote + LNoteDuplicati;
-      // Stessa rinumerazione per le decisioni del retrieval e per i passi completati.
+      // Stessa rinumerazione per le decisioni del retrieval e per l'elenco
+      // dei passi completati.
       if FRetrieval <> nil then
       begin
         for i := FRetrieval.Decisioni.Count - 1 downto 0 do
@@ -980,10 +1324,12 @@ begin
     LMappa.Free;
   end;
 
-  // Ultimo argomento: testo noto per il controllo dei valori ancorati (domanda + storico
-  // visto dal Planner).
+  RipristinaPassiPrecedenti(AStato);
+
+  // L'ultimo argomento e' il "testo noto" per il controllo dei valori
+  // ancorati: la domanda di questo turno piu' lo storico visto dal Planner.
   FErrori := TValidatorePiano.ValidaPiano(FPiano, FRetrieval, FCompletati,
-    FDomanda + sLineBreak + FStoricoTesto);
+    FDomandaEff + sLineBreak + FStoricoTesto);
   EventoControlli;
   if Length(FErrori) > 0 then
   begin
@@ -1021,7 +1367,8 @@ begin
 
   if (LEsito.CodiceArresto = 'CONFERMA_RICHIESTA') and (LUltimo <> nil) then
   begin
-    // Scrittura proposta: si salva cio' che serve per riprenderla da qui alla conferma.
+    // Scrittura proposta: si salva tutto cio' che serve per riprenderla
+    // esattamente da qui quando l'utente conferma.
     LIndice := 0;
     for i := 0 to FPiano.Passi.Count - 1 do
       if FPiano.Passi[i].Id = LUltimo.Id then
@@ -1057,23 +1404,69 @@ end;
 procedure TTurnoPianificato.PassoSintesi(AStato: TStatoTurno);
 var
   LEsecuzione: TEsitoEsecuzione;
-  LTesto: string;
+  LTesto, LBlocco: string;
+  LSoloRitiro: Boolean;
   LInizio, LFine: Integer;
 begin
   if FEsecutore <> nil then
     LEsecuzione := FEsecutore.Esito
   else
     LEsecuzione := nil;
-  LTesto := ChiamaLLM(AStato, TSintesiRisposta.RichiestaSintesi(FDomanda, FOggi, FPiano,
-    LEsecuzione, FArrestoPreventivo), 'sintesi');
+
+  // RIEPILOGO FISSO (ritiro/richiamo): se il piano ha aperto una non
+  // conformita' o cercato le spedizioni, i dati essenziali (lotti, giacenze,
+  // clienti) li scrive il codice con uno schema fisso, cosi' non cambiano da
+  // una risposta all'altra. Al modello resta solo un breve commento.
+  LSoloRitiro := False;
+  if FArrestoPreventivo = nil then
+    LBlocco := TSintesiRisposta.BloccoRiepilogoRitiro(LEsecuzione, LSoloRitiro)
+  else
+    LBlocco := '';
+
+  // Se il piano era solo il ritiro, il blocco E' la risposta (con la domanda
+  // finale fissa): nessuna chiamata al modello, quindi nessun rischio che il
+  // testo contraddica i dati, e qualche secondo in meno.
+  if LSoloRitiro and (LBlocco <> '') then
+  begin
+    Chiudi(AStato, LBlocco, STATO_CONCLUSO, FEtichetta);
+    Exit;
+  end;
+
+  if LBlocco = '' then
+    LTesto := ChiamaLLM(AStato, TSintesiRisposta.RichiestaSintesi(FDomandaEff, FOggi, FPiano,
+      LEsecuzione, FArrestoPreventivo), 'sintesi')
+  else
+  begin
+    // Il commento e' un di piu': se la chiamata al modello fallisce, il
+    // riepilogo resta comunque completo.
+    try
+      LTesto := ChiamaLLM(AStato, TSintesiRisposta.RichiestaSintesi(FDomandaEff, FOggi, FPiano,
+        LEsecuzione, FArrestoPreventivo, LBlocco), 'sintesi');
+    except
+      on E: Exception do
+      begin
+        TLog.Write('AGENTE - commento al riepilogo non riuscito: ' + E.Message);
+        LTesto := '';
+      end;
+    end;
+  end;
 
   // Un eventuale blocco di ragionamento rimasto nel testo non va all'utente.
   LInizio := Pos('<think>', LTesto);
   LFine := Pos('</think>', LTesto);
   if (LInizio > 0) and (LFine > LInizio) then
     Delete(LTesto, LInizio, LFine + Length('</think>') - LInizio);
+  LTesto := Trim(LTesto);
 
-  Chiudi(AStato, Trim(LTesto), STATO_CONCLUSO, FEtichetta);
+  if LBlocco <> '' then
+  begin
+    if (LTesto = '') or ContainsText(LTesto, 'NESSUN_COMMENTO') then
+      LTesto := LBlocco
+    else
+      LTesto := LBlocco + #10#10 + LTesto;
+  end;
+
+  Chiudi(AStato, LTesto, STATO_CONCLUSO, FEtichetta);
 end;
 
 // Cio' che e' successo nel turno, per il client e per la batteria di test
@@ -1196,7 +1589,7 @@ begin
   Result := ATesto.Replace(';', ',').Replace(#13, ' ').Replace(#10, ' ');
 end;
 
-// Il registro del turno nei tre file (vedi l'intestazione).
+// Il registro del turno nei tre file (vedi il commento in testa alla unit).
 procedure TTurnoPianificato.ScriviRegistro(AStato: TStatoTurno);
 var
   LDiagnostica: TDiagnosticaTurno;
@@ -1238,8 +1631,8 @@ begin
     LPassi := FPiano.Passi.Count;
   end;
 
-  // 1. Leggibile: un blocco per turno scritto in una volta, cosi' i turni di conversazioni
-  // diverse non si mescolano.
+  // 1. Leggibile: un blocco per turno, scritto in una volta sola cosi' i
+  //    turni di conversazioni diverse non si mescolano riga per riga.
   TRegistroPianificatore.ScriviLog(
     Format('%s  TURNO %d [%s]', [LAdesso, AStato.NumeroTurno, AStato.Esito.ConversationID]) + sLineBreak +
     '  UTENTE: ' + FDomanda + sLineBreak +

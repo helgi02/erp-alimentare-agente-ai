@@ -1,14 +1,30 @@
 unit TextFileWriterU;
 
-// Scrive righe di testo con timestamp su file, in append, thread-safe, senza conoscenza del
-// dominio.
-// L'handle si apre una sola volta (alla prima WriteLine) e resta aperto; AutoFlush scrive
-// comunque ogni riga subito. Ogni istanza ha il proprio lock, quindi file diversi non si
-// bloccano a vicenda.
-// Il file e' aperto con fmShareDenyNone: piu' istanze sullo stesso file non danno errore ma
-// le scritture non sono coordinate (va bene con un file per istanza).
-// Le eccezioni non vengono ingoiate (cartella non creabile, disco pieno...): le gestisce il
-// chiamante.
+{
+  Scrittura generica di righe di testo timestampate su file, in append,
+  thread-safe. Non ha alcuna conoscenza del dominio (email, campagne, ecc.):
+  prende in input una cartella e un nome file, e scrive.
+
+  Per performance, l'handle del file viene aperto una sola volta (alla prima
+  WriteLine) e tenuto aperto per tutta la vita dell'istanza, invece di
+  aprire/scrivere/chiudere ad ogni riga. AutoFlush garantisce comunque che
+  ogni riga sia scritta su disco subito dopo la chiamata.
+
+  Ogni istanza ha il proprio lock (non più uno globale condiviso da tutte le
+  istanze): scritture su file diversi non si serializzano più a vicenda,
+  importante ora che questa unit è pensata per essere riusata in più punti
+  dell'applicazione.
+
+  Il file viene aperto con condivisione piena (fmShareDenyNone): se in futuro
+  più istanze o processi dovessero puntare allo STESSO file contemporaneamente,
+  non otterrai un errore di sharing violation, ma le loro scritture non sono
+  coordinate tra loro (ogni istanza serializza solo le proprie). Per un uso
+  con un file dedicato per istanza (il caso attuale) non è un problema.
+
+  Politica di errore: NON ingoia le eccezioni. Se la scrittura fallisce
+  (cartella non creabile, disco pieno, permessi...) l'eccezione risale al
+  chiamante, che decide come gestirla (es. un fallback su un altro canale).
+}
 
 interface
 
@@ -28,14 +44,20 @@ type
     constructor Create(const AFolder, AFileName: String);
     destructor  Destroy; override;
 
-    // Scrive AMessage su una riga con timestamp; crea la cartella alla prima chiamata.
-    // Solleva un'eccezione se la scrittura fallisce.
+    // Scrive AMessage su una nuova riga, con timestamp automatico in testa.
+    // Crea la cartella se non esiste (solo alla prima chiamata). Solleva
+    // un'eccezione se la scrittura fallisce: il chiamante è responsabile
+    // di gestirla.
     procedure WriteLine(const AMessage: String);
-    // Come WriteLine senza timestamp, per formati strutturati (CSV).
+    // Come WriteLine ma SENZA il prefisso data/ora: serve per formati
+    // strutturati (es. CSV) in cui ogni riga deve essere esattamente quella
+    // passata dal chiamante. Stessa politica di errore di WriteLine.
     procedure WriteRawLine(const AMessage: String);
   end;
 
 implementation
+
+{ TTextFileWriter }
 
 constructor TTextFileWriter.Create(const AFolder, AFileName: String);
 begin
@@ -43,8 +65,9 @@ begin
   FFolder   := AFolder;
   FFileName := AFileName;
   FLock     := TCriticalSection.Create;
-  // FWriter si apre alla prima WriteLine, cosi' un problema (cartella, permessi) emerge al
-  // primo uso e non alla creazione.
+  // FWriter non viene aperto qui, ma alla prima WriteLine: così un eventuale
+  // problema (cartella non creabile, permessi) emerge al primo utilizzo
+  // reale, non alla semplice creazione dell'oggetto.
 end;
 
 destructor TTextFileWriter.Destroy;

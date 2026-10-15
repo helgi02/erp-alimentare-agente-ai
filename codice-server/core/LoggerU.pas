@@ -39,7 +39,7 @@ type
       FFallbackPath: string;
       FMaxRetries: Integer;
       FRetryDelay: Cardinal;
-      FConnection: TFDConnection;
+      FConnection: TFDConnection;  //  Connessione DEDICATA per questo thread
 
       procedure EnsureConnection;
       procedure CloseConnection;
@@ -110,6 +110,8 @@ type
 
 implementation
 
+{ ====== Helpers static ====== }
+
 class function TSecurityLogger.LogLevelToString(Level: TLogLevel): string;
 const
   MAP: array [TLogLevel] of string = ('INFO', 'WARNING', 'ERROR', 'SECURITY');
@@ -146,6 +148,8 @@ begin
   end;
 end;
 
+{ ====== TLogWorker ====== }
+
 constructor TSecurityLogger.TLogWorker.Create(AQueue: TThreadedQueue<TLogItem>;
   ABatchSize: Integer; ABatchDelay: Cardinal; const AFallbackPath: string);
 begin
@@ -160,7 +164,7 @@ begin
   FFallbackPath := AFallbackPath;
   FMaxRetries := 3;
   FRetryDelay := 1000;
-  FConnection := nil;
+  FConnection := nil;  //  Verrà creata quando necessaria
 end;
 
 destructor TSecurityLogger.TLogWorker.Destroy;
@@ -175,11 +179,14 @@ var
   Retry: Integer;
   LastError: string;
 begin
+  // Se connessione già attiva, ok
   if Assigned(FConnection) and FConnection.Connected then
     Exit;
 
+  // Chiudi eventuale connessione morta
   CloseConnection;
 
+  // Crea nuova connessione dedicata per questo thread
   for Retry := 1 to FMaxRetries do
   begin
     try
@@ -187,7 +194,7 @@ begin
       FConnection.ConnectionDefName := 'NaturalCarePool';
       FConnection.LoginPrompt := False;
       FConnection.Connected := True;
-      Exit;
+      Exit; // Successo
     except
       on E: Exception do
       begin
@@ -215,6 +222,7 @@ begin
       if FConnection.Connected then
         FConnection.Connected := False;
     except
+      // Ignora errori di chiusura
     end;
     FreeAndNil(FConnection);
   end;
@@ -247,6 +255,7 @@ begin
     LogFilePath := TPath.Combine(FFallbackPath, 'security_fallback.log');
     TFile.AppendAllText(LogFilePath, L, TEncoding.UTF8);
   except
+    // Ignora errori sul fallback stesso
   end;
 end;
 
@@ -314,8 +323,10 @@ begin
 
   while not Terminated do
   begin
+    // Stop richiesto?
     if FStopEvent.WaitFor(0) = wrSignaled then
     begin
+      // Flush finale
       if Count > 0 then
       begin
         try
@@ -336,6 +347,7 @@ begin
       Items[Count] := Item;
       Inc(Count);
 
+      // Batch pieno?
       if Count >= FBatchSize then
       begin
         try
@@ -354,6 +366,7 @@ begin
     end
     else
     begin
+      // Timeout - batch parziale?
       if (Count > 0) and (GetTickCount64 >= Deadline) then
       begin
         try
@@ -372,16 +385,18 @@ begin
     end;
   end;
 
+  // Chiudi connessione quando il thread termina
   CloseConnection;
 end;
+
+{ ====== TSecurityLogger ====== }
 
 constructor TSecurityLogger.Create;
 begin
   inherited;
   FBatchSize := 50;
   FBatchDelay := 100;
-  // Cartella dei log di ripiego: 'logs' accanto all'eseguibile.
-  FFallbackPath := TPath.Combine(ExtractFilePath(ParamStr(0)), 'logs');
+  FFallbackPath := 'C:\ANPIF\bin\logs';
 
   if not TDirectory.Exists(FFallbackPath) then
     TDirectory.CreateDirectory(FFallbackPath);
@@ -481,9 +496,12 @@ begin
           ]),
         TEncoding.UTF8);
     except
+      // Ignora errori sul fallback
     end;
   end;
 end;
+
+{ ====== API pubblica ====== }
 
 class procedure TSecurityLogger.Log(Level: TLogLevel; Category: TLogCategory;
   Action: string; Success: Boolean; Context: TWebContext; UserId: Integer;
@@ -576,9 +594,11 @@ begin
     ResourceId, ResourceType, Message);
 end;
 
+{ ====== Query sincrone ====== }
+
 function TSecurityLogger.GetFailedLoginAttempts(IPAddress: string): Integer;
 var
-  AQ: TAutoQuery;
+  AQ: TAutoQuery;  //  Usa TAutoQuery
   ErrMsg: string;
   LogFilePath: string;
 begin
@@ -596,7 +616,7 @@ begin
       if not AQ.Query.IsEmpty then
         Result := AQ.Query.FieldByName('attempts').AsInteger;
     finally
-      AQ.Free;
+      AQ.Free;  // Libera Query  Connection
     end;
   except
     on E: Exception do
@@ -611,6 +631,7 @@ begin
         LogFilePath := TPath.Combine(FFallbackPath, 'security_fallback.log');
         TFile.AppendAllText(LogFilePath, ErrMsg, TEncoding.UTF8);
       except
+        // Ignora errori sul fallback
       end;
       Result := 0;
     end;

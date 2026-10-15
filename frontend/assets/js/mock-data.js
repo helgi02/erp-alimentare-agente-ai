@@ -229,7 +229,8 @@ App.MockData = {
                     { id: 602, semilavorato_id: 102, entita_codice: 'SL-0102', entita_denominazione: 'Pesto base', codice_lotto: 'LSL-2026-0602', data_produzione: '2026-08-27', quantita: 90.0000, quantita_disponibile: 54.0000, unita_misura: 'kg', ricetta_id: 602, stabilimento_id: 1, creato_il: '2026-08-27T06:00:00', aggiornato_il: '2026-08-27T06:00:00' })
             ],
             prodotti_finiti_raggiunti: [
-                Object.assign({ consumato_direttamente: false, quantita_consumata: 108.0000, spedizioni: SPEDIZIONI_LOTTO_342() },
+                Object.assign({ consumato_direttamente: false, quantita_consumata: 108.0000, spedizioni: SPEDIZIONI_LOTTO_342(),
+                    percorsi: [{ consumato_direttamente: false, quantita_consumata: 108.0000, unita_misura_consumata: 'kg', tramite_codice_lotto: 'LSL-2026-0602' }] },
                     { id: 342, prodotto_finito_id: 12, entita_codice: 'PF-0012', entita_denominazione: 'Sugo al basilico 320g', codice_lotto: 'LPF-2026-0342', data_produzione: '2026-02-20', data_scadenza: '2027-08-13', quantita: 12000.0000, quantita_disponibile: 3600.0000, unita_misura: 'pz', ricetta_id: 501, stabilimento_id: 1, creato_il: '2026-02-20T07:00:00', aggiornato_il: '2026-08-11T07:00:00' })
             ]
         },

@@ -104,7 +104,7 @@ App.Chat = {
     // I tre scenari del progetto resi cliccabili: la demo non deve
     // dipendere da cosa ci si ricorda di digitare sul momento.
     suggerimenti: [
-        'Il lotto di uova LMP-MP005-002 è risultato non conforme per contaminazione da Salmonella. Apri la non conformità e dimmi quali lotti di prodotto finito, ordini e clienti sono coinvolti.',
+        'Il lotto di uova LMP-MP005-002 è risultato non conforme per contaminazione da Salmonella. Apri la non conformità NC-2026-050 su questo lotto e dimmi a quali clienti è arrivato.',
         'Quali sono stati i 5 prodotti più venduti nel 2026 in quantità, quanto hanno fatturato, e qual è il cliente che ha comprato di più?',
         'Simula l\'adattamento della ricetta della Torta Caprese 800g sostituendo il burro con la margarina vegetale, e dimmi di quanto cambia il costo di produzione e quali allergeni restano.'
     ],

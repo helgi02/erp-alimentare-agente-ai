@@ -166,14 +166,14 @@ App.Markdown = (function () {
 
         // Grassetto: **...** oppure __...__
         r = r.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
-        r = r.replace(/__([^_]+?)__/g, '<strong>$1</strong>');
+        r = r.replace(/(?<![A-Za-z0-9_])__([^_]+?)__(?![A-Za-z0-9_])/g, '<strong>$1</strong>');
 
         // Corsivo: *...* oppure _..._ (dopo il grassetto, cosi' i singoli
         // asterischi/underscore rimasti sono davvero corsivo). A questo
         // punto codice, link e URL nudi sono gia' diventati segnaposti
         // innocui: questa regola non puo' piu' raggiungerli.
         r = r.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
-        r = r.replace(/_([^_]+?)_/g, '<em>$1</em>');
+        r = r.replace(/(?<![A-Za-z0-9_])_([^_]+?)_(?![A-Za-z0-9_])/g, '<em>$1</em>');
 
         // Ripristino, per ultimo: il contenuto protetto non e' mai
         // passato da nessuna delle sostituzioni sopra.

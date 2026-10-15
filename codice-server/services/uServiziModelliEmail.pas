@@ -1,19 +1,31 @@
 unit uServiziModelliEmail;
 
-// Email a testo fisso: legge un modello dalla tabella modelli_email
-// (scripts/004_modelli_email.sql) e sostituisce i segnaposto {{nome}} con i valori
-// ricevuti.
-// Testo fisso perche' le comunicazioni ufficiali (ritiro/richiamo) devono avere sempre lo
-// stesso testo e dati esatti, quindi non le scrive il modello di linguaggio. Il testo sta
-// nel database: si corregge con un UPDATE senza ricompilare ed e' classificato per
-// categoria.
-// Regole: segnaposto {{nome}} senza distinzione di maiuscole, spazi ammessi ({{ nome }});
-// un segnaposto senza valore e' un errore (Componi restituisce False e cosa manca), non si
-// spedisce una email con un buco; i valori in piu' sono ignorati; un corpo in testo
-// semplice diventa HTML (caratteri speciali protetti, a capo -> <br>) perche' TEmailServer
-// spedisce HTML; in un corpo gia' HTML ogni valore e' protetto prima dell'inserimento (un
-// "<" in una ragione sociale non rompe la pagina).
-// Non invia e non conosce il dominio: l'invio e' in Service.EmailServer.pas.
+(* ============================================================================
+  TServizioModelliEmail - email a TESTO FISSO: legge un modello dalla tabella
+  modelli_email (scripts/004_modelli_email.sql) e sostituisce i segnaposto
+  {{nome}} con i valori ricevuti.
+
+  -- Perche' un testo fisso --------------------------------------------------
+  Per le comunicazioni "ufficiali" (ritiro/richiamo) il testo deve essere
+  sempre lo stesso e i dati (lotti, ordini, DDT) devono essere esatti: non lo
+  scrive il modello di linguaggio. Il testo sta nel database, quindi si
+  corregge con un UPDATE senza ricompilare, ed e' classificato per categoria.
+
+  -- Regole di composizione --------------------------------------------------
+  - segnaposto: {{nome}}, senza distinguere maiuscole/minuscole, spazi
+    ammessi ({{ nome }});
+  - un segnaposto senza valore e' un ERRORE (non si spedisce una email con
+    un buco): Componi restituisce False e l'elenco di cio' che manca;
+  - i valori in piu', che il modello non usa, sono ignorati;
+  - corpo in testo semplice: dopo la sostituzione viene convertito in HTML
+    (caratteri speciali protetti, a capo -> <br>), perche' TEmailServer
+    spedisce HTML;
+  - corpo gia' in HTML: ogni VALORE viene protetto prima di essere inserito,
+    cosi' un "<" in una ragione sociale non rompe la pagina.
+
+  Questo servizio non invia nulla e non conosce il dominio (lotti, clienti):
+  compone soltanto. L'invio e' in Service.EmailServer.pas.
+  ============================================================================ *)
 
 interface
 
@@ -30,8 +42,8 @@ type
     Corpo: string;
   end;
 
-  // Email pronta. Corpo e' il testo dopo la sostituzione (per l'anteprima); CorpoHtml e'
-  // quello da spedire.
+  // Una email pronta. Corpo e' il testo cosi' com'e' nel modello dopo la
+  // sostituzione (serve all'anteprima); CorpoHtml e' quello da spedire.
   TEmailComposta = record
     Oggetto: string;
     Corpo: string;
@@ -40,15 +52,16 @@ type
 
   TServizioModelliEmail = class
   public
-    // False se nessun modello ha quel codice (senza distinzione di maiuscole).
+    // False se nessun modello ha quel codice (ricerca senza distinguere
+    // maiuscole/minuscole).
     class function Trova(const ACodice: string; out AModello: TModelloEmail): Boolean;
-    // "codice1, codice2, ..." per gli errori.
+    // "codice1, codice2, ..." per i messaggi d'errore.
     class function CodiciDisponibili: string;
     // AVariabili: nome (minuscolo) -> valore. Resta del chiamante.
     class function Componi(const AModello: TModelloEmail;
       AVariabili: TDictionary<string, string>; out AEmail: TEmailComposta;
       out AErrore: string): Boolean;
-    // True se il testo ha gia' tag HTML comuni.
+    // True se il testo contiene gia' tag HTML di uso comune.
     class function SembraHtml(const ATesto: string): Boolean;
     // Testo semplice -> HTML (se e' gia' HTML resta com'e').
     class function TestoComeHtml(const ATesto: string): string;
@@ -77,8 +90,9 @@ begin
   Result := StringReplace(Result, #10, '<br>' + #13#10, [rfReplaceAll]);
 end;
 
-// Sostituisce i segnaposto {{nome}}. I nomi senza valore vanno in AMancanti (una volta
-// sola) e restano nel testo. AProteggiValori = True se ATesto e' HTML.
+// Sostituisce i segnaposto {{nome}} di ATesto. I nomi senza valore finiscono
+// in AMancanti (una volta sola) e restano nel testo cosi' come sono.
+// AProteggiValori = True quando ATesto e' HTML.
 function SostituisciSegnaposto(const ATesto: string;
   AVariabili: TDictionary<string, string>; AMancanti: TList<string>;
   AProteggiValori: Boolean): string;
@@ -97,6 +111,7 @@ begin
     if LChiude = 0 then
       Break;
 
+    // Testo prima del segnaposto, poi il valore.
     Result := Result + Copy(ATesto, LPosizione, LApre - LPosizione);
     LNome := LowerCase(Trim(Copy(ATesto, LApre + 2, LChiude - LApre - 2)));
     if AVariabili.TryGetValue(LNome, LValore) and (Trim(LValore) <> '') then
@@ -116,6 +131,8 @@ begin
   Result := Result + Copy(ATesto, LPosizione, MaxInt);
 end;
 
+{ TServizioModelliEmail }
+
 class function TServizioModelliEmail.Trova(const ACodice: string;
   out AModello: TModelloEmail): Boolean;
 var
@@ -123,8 +140,8 @@ var
 begin
   Result := False;
   try
-    // LOWER su entrambi i lati: il codice arriva da un argomento di tool e non deve fallire
-    // per una maiuscola.
+    // LOWER su entrambi i lati: il codice e' una chiave tecnica, ma arriva
+    // da un argomento di tool e non deve fallire per una maiuscola.
     LAutoQuery := TDB.GetInstance.getQueryResult(
       SQL_SELECT_MODELLO + 'WHERE LOWER(codice) = LOWER(:codice)', [Trim(ACodice)]);
   except
@@ -175,8 +192,8 @@ end;
 
 class function TServizioModelliEmail.SembraHtml(const ATesto: string): Boolean;
 const
-  // Non e' un parser: basta distinguere "testo con tag" da "testo semplice", dove un "<" e'
-  // solo un carattere.
+  // Non e' un parser: basta distinguere "testo con tag" da "testo semplice",
+  // dove un eventuale "<" e' solo un carattere.
   TAG_COMUNI: array[0..9] of string =
     ('</', '<br', '<p>', '<p ', '<div', '<table', '<ul', '<ol', '<h1', '<h2');
 var
@@ -206,7 +223,7 @@ begin
   AErrore := '';
   LMancanti := TList<string>.Create;
   try
-    // Oggetto: un'intestazione, mai HTML, su una riga.
+    // Oggetto: un'intestazione, mai HTML, su una riga sola.
     AEmail.Oggetto := SostituisciSegnaposto(AModello.Oggetto, AVariabili, LMancanti, False);
     AEmail.Oggetto := StringReplace(AEmail.Oggetto, #13, ' ', [rfReplaceAll]);
     AEmail.Oggetto := Trim(StringReplace(AEmail.Oggetto, #10, ' ', [rfReplaceAll]));
