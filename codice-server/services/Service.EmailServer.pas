@@ -72,6 +72,17 @@ type
       const ADestinatario, AOggetto, ACorpoHtml: string;
       const AAllegato: TEmailAllegato;
       out AErrore: string): Boolean;
+
+    // ESITO COMPLESSIVO DI UN INVIO (20/10). Usato dall'endpoint
+    // /api/email/invio e dai tool invia_email / invia_email_da_modello,
+    // cosi' frontend e chat ricevono la stessa forma:
+    //   AStato     'tutte_inviate' | 'parziale' | 'nessuna_inviata'
+    //   AMessaggio frase gia' pronta per l'utente
+    // Con [SMTP] Simula=1 la frase lo dice esplicitamente: prima l'utente
+    // leggeva "inviata con successo" anche se nessuna email era uscita.
+    class function InSimulazione: Boolean;
+    class procedure DescriviEsito(AInviate, ANonInviate: Integer;
+      out AStato, AMessaggio: string);
   end;
 
 implementation
@@ -81,6 +92,36 @@ uses
   System.SyncObjs,
   System.JSON,
   uConfig;
+
+class function TEmailServer.InSimulazione: Boolean;
+begin
+  Result := TConfig.GetInstance.SMTP.Simula;
+end;
+
+class procedure TEmailServer.DescriviEsito(AInviate, ANonInviate: Integer;
+  out AStato, AMessaggio: string);
+var
+  LTotale: Integer;
+begin
+  LTotale := AInviate + ANonInviate;
+  if AInviate = 0 then
+    AStato := 'nessuna_inviata'
+  else if ANonInviate = 0 then
+    AStato := 'tutte_inviate'
+  else
+    AStato := 'parziale';
+
+  if AStato = 'nessuna_inviata' then
+    AMessaggio := Format('Nessuna email inviata (%d tentate).', [LTotale])
+  else if AStato = 'tutte_inviate' then
+    AMessaggio := Format('Email inviate: %d su %d.', [AInviate, LTotale])
+  else
+    AMessaggio := Format('Email inviate: %d su %d. Non inviate: %d.', [AInviate, LTotale, ANonInviate]);
+
+  if InSimulazione and (AInviate > 0) then
+    AMessaggio := AMessaggio + ' Invio SIMULATO (configurazione di prova): ' +
+      'nessuna email e'' uscita dal server.';
+end;
 
 // Message-Id univoco: <GUID@dominio-del-mittente>. Il GUID evita collisioni
 // fra email inviate nello stesso millisecondo da thread diversi.

@@ -172,31 +172,69 @@ end;
 // lotto non esiste piu'): serve al chiamante per l'esplorazione ricorsiva
 // a valle, dove QUESTO lotto diventa il componente consumato.
 //
-// ACodiceLottoRaggiunto (out) e' il codice del lotto appena aggiunto
-// ('' se il lotto non esiste): serve a chi esplora a valle per indicare,
-// nei "percorsi" dei prodotti finiti, attraverso quale semilavorato un
-// prodotto finito e' stato raggiunto.
+// ACodiceLottoRaggiunto (out) e' il codice del lotto raggiunto ('' se il
+// lotto non esiste): serve a chi esplora a valle per indicare, nei
+// "percorsi", attraverso quale semilavorato un lotto e' stato raggiunto.
+//
+// RAGGRUPPAMENTO PER LOTTO (19/10, segnalazione del professore): stesso
+// schema a "percorsi" di AggiungiProdottoFinitoRaggiunto (vedi sotto).
+// Un lotto di semilavorato puo' essere raggiunto piu' volte: es. la
+// materia prima entra direttamente nel semilavorato B e anche nel
+// semilavorato A, che a sua volta entra in B. Prima ogni consumo produceva
+// un elemento, quindi B compariva due volte (materie prime 6 e 53). Ora
+// c'e' UN elemento per lotto e ogni consumo e' una voce di "percorsi":
+//   consumato_direttamente   True se parte esattamente dal lotto origine
+//   quantita_consumata       nell'unita' del componente consumato
+//   unita_misura_consumata   unita' del componente consumato
+//   tramite_codice_lotto     codice del semilavorato attraversato (assente
+//                            se il consumo e' diretto)
+// L'esplorazione a valle di un lotto gia' raggiunto non si ripete: la
+// evita AVisitati in EsploraSemilavorato, come prima.
+// ATramiteCodiceLotto: codice del semilavorato da cui arriva questo
+// consumo ('' se il componente consumato e' il lotto origine).
 function AggiungiSemilavoratoRaggiunto(AArray: TJSONArray; ALottoSemilavoratoID: Integer;
   AConsumatoDirettamente: Boolean; AQuantitaConsumata: Currency;
-  const AUnitaConsumata: string; out ACodiceLottoRaggiunto: string): string;
+  const AUnitaConsumata, ATramiteCodiceLotto: string; out ACodiceLottoRaggiunto: string): string;
 var
-  LInfo: TJSONObject;
-  LCodice: TJSONValue;
+  LInfo, LPercorso: TJSONObject;
+  LElemento, LCodice: TJSONValue;
+  LPercorsi: TJSONArray;
 begin
   Result := '';
   ACodiceLottoRaggiunto := '';
-  LInfo := TServizioLotti.DettaglioSemilavorato(ALottoSemilavoratoID);
+
+  // Lotto gia' presente nell'elenco? Allora si aggiunge solo il percorso.
+  LInfo := nil;
+  for LElemento in AArray do
+    if (LElemento is TJSONObject) and
+       ((TJSONObject(LElemento).GetValue('id') as TJSONNumber).AsInt = ALottoSemilavoratoID) then
+    begin
+      LInfo := TJSONObject(LElemento);
+      Break;
+    end;
+
   if LInfo = nil then
-    Exit; // dato anomalo (lotto referenziato da un consumo ma non piu' in anagrafica): si ignora questo nodo, non si blocca il resto dell'albero
+  begin
+    LInfo := TServizioLotti.DettaglioSemilavorato(ALottoSemilavoratoID);
+    if LInfo = nil then
+      Exit; // dato anomalo (lotto referenziato da un consumo ma non piu' in anagrafica): si ignora questo nodo, non si blocca il resto dell'albero
+    LInfo.AddPair('percorsi', TJSONArray.Create);
+    AArray.AddElement(LInfo);
+  end;
 
   Result := UnitaMisuraDi(LInfo);
   LCodice := LInfo.GetValue('codice_lotto');
   if LCodice <> nil then
     ACodiceLottoRaggiunto := LCodice.Value;
-  LInfo.AddPair('consumato_direttamente', TJSONBool.Create(AConsumatoDirettamente));
-  LInfo.AddPair('quantita_consumata', TJSONNumber.Create(AQuantitaConsumata));
-  LInfo.AddPair('unita_misura_consumata', AUnitaConsumata);
-  AArray.AddElement(LInfo);
+
+  LPercorsi := LInfo.GetValue('percorsi') as TJSONArray;
+  LPercorso := TJSONObject.Create;
+  LPercorso.AddPair('consumato_direttamente', TJSONBool.Create(AConsumatoDirettamente));
+  LPercorso.AddPair('quantita_consumata', TJSONNumber.Create(AQuantitaConsumata));
+  LPercorso.AddPair('unita_misura_consumata', AUnitaConsumata);
+  if ATramiteCodiceLotto <> '' then
+    LPercorso.AddPair('tramite_codice_lotto', ATramiteCodiceLotto);
+  LPercorsi.AddElement(LPercorso);
 end;
 
 // ---------------------------------------------------------------------
@@ -299,7 +337,7 @@ begin
     begin
       LUnitaFiglio := AggiungiSemilavoratoRaggiunto(ASemilavoratiRaggiunti,
         LConsumo2.LottoSemilavoratoID, False, LConsumo2.QuantitaConsumata, AUnitaLotto,
-        LCodiceFiglio);
+        ACodiceLotto, LCodiceFiglio);
       EsploraSemilavorato(LConsumo2.LottoSemilavoratoID, LUnitaFiglio, LCodiceFiglio,
         ASemilavoratiRaggiunti, AProdottiFinitiRaggiunti, AVisitati);
     end;
@@ -349,7 +387,7 @@ begin
       begin
         LUnitaFiglio := AggiungiSemilavoratoRaggiunto(LSemilavoratiRaggiunti,
           LConsumo2.LottoSemilavoratoID, True, LConsumo2.QuantitaConsumata,
-          UnitaMisuraDi(LOrigine), LCodiceFiglio);
+          UnitaMisuraDi(LOrigine), '', LCodiceFiglio);
         EsploraSemilavorato(LConsumo2.LottoSemilavoratoID, LUnitaFiglio, LCodiceFiglio,
           LSemilavoratiRaggiunti, LProdottiFinitiRaggiunti, LVisitati);
       end;
@@ -409,7 +447,7 @@ begin
       begin
         LUnitaFiglio := AggiungiSemilavoratoRaggiunto(LSemilavoratiRaggiunti,
           LConsumo2.LottoSemilavoratoID, True, LConsumo2.QuantitaConsumata,
-          UnitaMisuraDi(LOrigine), LCodiceFiglio);
+          UnitaMisuraDi(LOrigine), '', LCodiceFiglio);
         EsploraSemilavorato(LConsumo2.LottoSemilavoratoID, LUnitaFiglio, LCodiceFiglio,
           LSemilavoratiRaggiunti, LProdottiFinitiRaggiunti, LVisitati);
       end;

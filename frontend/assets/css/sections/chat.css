@@ -1583,3 +1583,19 @@ body.resizing .sidebar {
 .chat-status-assente .status-dot {
   background-color: #94a3b8;
 }
+
+/* Esito di un invio email (20/10): riquadro colorato sotto la risposta o
+   nel modulo dell'anteprima. I colori vengono da .badge-soft-*
+   (views-common.css); qui solo forma e rientro. */
+.chat-esito-invio {
+  margin: .5rem 0 .5rem var(--agent-indent);
+  max-width: calc(100% - var(--agent-indent));
+  padding: .5rem .75rem;
+  border-radius: .5rem;
+  font-size: .875rem;
+  font-weight: 500;
+}
+.chat-form .chat-esito-invio {
+  margin-left: 0;
+  max-width: 100%;
+}

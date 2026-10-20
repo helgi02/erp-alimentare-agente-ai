@@ -291,6 +291,10 @@ begin
     LOpzioni.SceltaConferma := LowerCase(Campo(LRichiesta, 'conferma'));
     if (LOpzioni.SceltaConferma <> 'conferma') and (LOpzioni.SceltaConferma <> 'annulla') then
       LOpzioni.SceltaConferma := '';
+    // Autore delle scritture (19/10). Non c'e' ancora autenticazione (vedi
+    // sviluppi-futuri_autenticazione-sicurezza): il nome arriva dal client.
+    // Si tiene corto per non far crescere a piacere i dati salvati.
+    LOpzioni.Utente := Copy(Trim(Campo(LRichiesta, 'utente')), 1, 100);
     if TConfig.GetInstance.AbilitaOverrideTest then
     begin
       LOpzioni.ModalitaOverride := Campo(LRichiesta, 'modalita_selezione');

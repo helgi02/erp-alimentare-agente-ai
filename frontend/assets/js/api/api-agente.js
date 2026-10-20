@@ -56,6 +56,11 @@ App.Api.Agente = {
             conversation_id: conversationId || null
         };
         if (opzioni && opzioni.conferma) corpo.conferma = opzioni.conferma;
+        // Chi sta usando la chat (badge in alto a destra, index.html): il
+        // server lo usa come "creato_da" delle scritture, al posto del
+        // valore scritto dal modello (vedi TTurnoPianificato.ImponiAutore).
+        const badgeUtente = document.querySelector('.user-name');
+        if (badgeUtente && badgeUtente.textContent.trim()) corpo.utente = badgeUtente.textContent.trim();
         return App.Http.post('/api/ai/turni', corpo);
     },
 

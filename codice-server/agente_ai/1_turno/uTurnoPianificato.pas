@@ -116,6 +116,9 @@ type
     // Copia della voce {"id","tool","argomenti","esito",...} del passo AIdPasso
     // dell'ULTIMO turno, se e' andato a buon fine; altrimenti nil. Del chiamante.
     class function PassoPrecedente(const AID: string; AIdPasso: Integer): TJSONObject;
+    // Come PassoPrecedente, ma cerca per NOME DEL TOOL il primo passo
+    // riuscito dell'ultimo turno. nil se non c'e'. Del chiamante.
+    class function PassoPrecedenteDiTool(const AID, ATool: string): TJSONObject;
     // Aggiunge il turno concluso. ATurno e ASospeso passano all'archivio
     // (ASospeso = nil cancella la scrittura in sospeso).
     class procedure Registra(const AID: string; ATurno: TTurnoStorico; ASospeso: TJSONObject);
@@ -187,9 +190,15 @@ type
     procedure ChiudiNonValido(AStato: TStatoTurno; const ACodice, AMessaggio: string);
     procedure ControllaPiano(AStato: TStatoTurno);
     procedure RipristinaPassiPrecedenti(AStato: TStatoTurno);
+    procedure ImponiAutore(AStato: TStatoTurno);
+    // 20/10: un applica_adattamento_ricetta senza sostituzioni ne' aggiunte
+    // riprende quelle della simulazione del turno precedente (vedi la
+    // procedura).
+    procedure RecuperaModificheAdattamento(AStato: TStatoTurno);
     procedure AggiungiTraccia(AStato: TStatoTurno; AEsito: TEsitoPasso);
     procedure PassoConferma(AStato: TStatoTurno);
     procedure PassoProposta(AStato: TStatoTurno);
+    function PianoAnteprimaEmail(AStato: TStatoTurno): Boolean;
     procedure PassoPiano(AStato: TStatoTurno);
     procedure PassoCompletamento(AStato: TStatoTurno);
     procedure PassoEsecuzione(AStato: TStatoTurno);
@@ -341,6 +350,26 @@ begin
       for LVoce in LStorico.Ultimo.Esiti do
         if (LVoce is TJSONObject) and
            (TestoCampo(TJSONObject(LVoce), 'id') = IntToStr(AIdPasso)) and
+           (TestoCampo(TJSONObject(LVoce), 'esito') = 'ok') then
+          Exit(LVoce.Clone as TJSONObject);
+  finally
+    FLock.Release;
+  end;
+end;
+
+class function TArchivioStorici.PassoPrecedenteDiTool(const AID, ATool: string): TJSONObject;
+var
+  LStorico: TStoricoTurni;
+  LVoce: TJSONValue;
+begin
+  Result := nil;
+  FLock.Acquire;
+  try
+    if FStorici.TryGetValue(AID, LStorico) and (LStorico.Ultimo <> nil) and
+       (LStorico.Ultimo.Esiti <> nil) then
+      for LVoce in LStorico.Ultimo.Esiti do
+        if (LVoce is TJSONObject) and
+           (TestoCampo(TJSONObject(LVoce), 'tool') = ATool) and
            (TestoCampo(TJSONObject(LVoce), 'esito') = 'ok') then
           Exit(LVoce.Clone as TJSONObject);
   finally
@@ -979,6 +1008,16 @@ begin
     Exit;
   end;
 
+  // PROPOSTA FISSA DEL RITIRO (19/10). La domanda sull'anteprima delle email
+  // l'ha scritta il codice, quindi il codice sa gia' quale piano serve: non lo
+  // si chiede al modello. Nei log del 13/10 e del 19/10 lo stesso "si'"
+  // produceva piani diversi e quasi sempre sbagliati (riferimento
+  // "$2.comunicazioni" a un passo del turno prima, tool giusto declassato dal
+  // retrieval, email ricopiate a mano per 3 clienti su 5).
+  if (LSceltaTesto = 'accetta') and SameText(Trim(FProposta), PROPOSTA_ANTEPRIMA_EMAIL) and
+     PianoAnteprimaEmail(AStato) then
+    Exit;
+
   if LSceltaTesto = 'accetta' then
     // Il Planner non riceve un "si'" senza contesto: riceve la proposta in
     // chiaro, con la richiesta di eseguirla.
@@ -989,6 +1028,68 @@ begin
       'con un passo di sola lettura. ' +
       'Messaggio dell''utente: ' + FDomanda;
   FFase := fpPiano;
+end;
+
+// Piano FISSO per il "si'" all'anteprima delle email del ritiro:
+//   1. trova_ordini_spedizioni_lotto_prodotto_finito con gli STESSI argomenti
+//      (gia' risolti: id dei lotti e motivo) del turno precedente. E' una
+//      lettura: si ripete per avere le "comunicazioni" in questo piano, perche'
+//      un riferimento $N non puo' puntare a un turno passato;
+//   2. anteprima_email_da_modello {"messaggi": "$1.comunicazioni"}.
+// Nessuna chiamata al modello per piano e completamento. Il piano passa
+// comunque da ControllaPiano (normalizzazione e validatore), come quelli
+// scritti dal modello: il codice non si salta i propri controlli.
+// False se il turno precedente non ha una ricerca spedizioni riuscita: allora
+// si torna alla strada normale (Planner).
+function TTurnoPianificato.PianoAnteprimaEmail(AStato: TStatoTurno): Boolean;
+const
+  TOOL_SPEDIZIONI = 'trova_ordini_spedizioni_lotto_prodotto_finito';
+  TOOL_ANTEPRIMA = 'anteprima_email_da_modello';
+var
+  LPrecedente: TJSONObject;
+  LPasso: TPasso;
+begin
+  Result := False;
+  LPrecedente := TArchivioStorici.PassoPrecedenteDiTool(AStato.Esito.ConversationID, TOOL_SPEDIZIONI);
+  if LPrecedente = nil then
+    Exit;
+  try
+    if not (LPrecedente.GetValue('argomenti') is TJSONObject) then
+      Exit;
+
+    FPiano := TPiano.Create;
+    FPiano.Esito := ESITO_OPERATIVA;
+
+    LPasso := TPasso.Create;
+    LPasso.Id := 1;
+    LPasso.Azione := 'rileggo le spedizioni dei lotti coinvolti (come nel turno precedente)';
+    LPasso.Tool := TOOL_SPEDIZIONI;
+    LPasso.Argomenti := LPrecedente.GetValue('argomenti').Clone as TJSONObject;
+    FPiano.Passi.Add(LPasso);
+
+    LPasso := TPasso.Create;
+    LPasso.Id := 2;
+    LPasso.Azione := 'mostro l''anteprima delle email per i clienti coinvolti';
+    LPasso.Tool := TOOL_ANTEPRIMA;
+    LPasso.Argomenti := TJSONObject.Create.AddPair('messaggi', '$1.comunicazioni');
+    LPasso.Dipendenze := [1];
+    FPiano.Passi.Add(LPasso);
+
+    // La domanda "effettiva" (vista da validatore e sintesi) contiene gli
+    // argomenti ripetuti: cosi' il controllo dei valori ancorati trova gli id
+    // dei lotti, e la sintesi sa cosa ha accettato l'utente.
+    FDomandaEff := 'L''utente accetta la proposta: "' + FProposta + '" ' +
+      '(ricerca spedizioni ripetuta con ' + FPiano.Passi[0].Argomenti.ToJSON +
+      '). Messaggio dell''utente: ' + FDomanda;
+  finally
+    LPrecedente.Free;
+  end;
+
+  FCompletati := nil;               // nessun passo scelto dal Completer
+  EventoPiano('piano fisso');
+  TLog.Write('AGENTE - "si''" all''anteprima email: piano fisso costruito dal codice');
+  ControllaPiano(AStato);           // valida; se va bene imposta FFase := fpEsecuzione
+  Result := True;
 end;
 
 procedure TTurnoPianificato.PassoPiano(AStato: TStatoTurno);
@@ -1273,6 +1374,133 @@ begin
   end;
 end;
 
+// AUTORE DELLE SCRITTURE (19/10). "creato_da" dice chi ha autorizzato una
+// scrittura (tracciabilita'): non e' un dato che il modello possa sapere.
+// Senza questo passo Qwen scriveva "Agente" e la variante della Torta
+// Caprese risultava creata da "Agente". Qui il codice sostituisce il valore
+// con l'utente della chat (TOpzioniTurno.Utente) in OGNI passo di scrittura
+// il cui schema di input ha "creato_da": vale per qualsiasi tool, non solo
+// per le ricette. Si fa PRIMA della validazione, quindi anche la richiesta
+// di conferma mostra gia' l'autore vero, e il piano salvato in attesa di
+// conferma lo conserva.
+procedure TTurnoPianificato.ImponiAutore(AStato: TStatoTurno);
+const
+  CAMPO_AUTORE = 'creato_da';
+var
+  LPasso: TPasso;
+  LContratto: TContrattoTool;
+  LSchema: TJSONObject;
+  LProprieta: TJSONValue;
+  LVecchio: TJSONPair;
+begin
+  if AStato.Opzioni.Utente = '' then
+    Exit;
+  for LPasso in FPiano.Passi do
+  begin
+    if (LPasso.Tool = '') or not TRegistroContrattiTool.Trova(LPasso.Tool, LContratto) or
+       (LContratto.Effetto <> etScrittura) then
+      Continue;
+    LSchema := TPianificatore.SchemaInputTool(LPasso.Tool);
+    try
+      LProprieta := LSchema.GetValue('properties');
+      if not ((LProprieta is TJSONObject) and
+              (TJSONObject(LProprieta).GetValue(CAMPO_AUTORE) <> nil)) then
+        Continue;
+    finally
+      LSchema.Free;
+    end;
+    if LPasso.Argomenti = nil then
+      LPasso.Argomenti := TJSONObject.Create;
+    LVecchio := LPasso.Argomenti.RemovePair(CAMPO_AUTORE);
+    if LVecchio <> nil then
+    begin
+      if LVecchio.JsonValue.Value <> AStato.Opzioni.Utente then
+        FNote := FNote + [Format('passo %d: creato_da "%s" sostituito con l''utente "%s"',
+          [LPasso.Id, LVecchio.JsonValue.Value, AStato.Opzioni.Utente])];
+      LVecchio.Free;
+    end;
+    LPasso.Argomenti.AddPair(CAMPO_AUTORE, AStato.Opzioni.Utente);
+  end;
+end;
+
+// 20/10 (prova Torta Caprese senza lattosio). Il modulo "Conferma e crea"
+// manda solo codice, nome e autore del nuovo prodotto: le SOSTITUZIONI scelte
+// stanno nella simulazione del turno prima, e il Planner/Completer dovrebbe
+// ricopiarle da solo. Con Qwen 9B a volte non lo fa: il piano e' arrivato con
+// "applica_adattamento_ricetta" senza sostituzioni, il validatore l'ha
+// scartato (ALMENO_UNO_MANCANTE) e l'utente ha avuto il messaggio generico.
+// Qui il codice le riprende dalla simulazione del turno precedente, che ha
+// gia' i valori RISOLTI (id numerici). Si fa solo se:
+//  - il passo non ha ne' sostituzioni ne' aggiunte (mai si sovrascrive cio'
+//    che il modello ha scritto);
+//  - la simulazione precedente riguarda lo STESSO prodotto (se entrambi
+//    indicano un prodotto e sono diversi, non si copia nulla).
+// L'utente non conferma al buio: la richiesta di conferma mostra quali
+// sostituzioni verranno applicate (TestoConferma).
+procedure TTurnoPianificato.RecuperaModificheAdattamento(AStato: TStatoTurno);
+const
+  TOOL_APPLICA = 'applica_adattamento_ricetta';
+  TOOL_SIMULA = 'simula_adattamento_ricetta';
+  CAMPI: array[0..1] of string = ('sostituzioni', 'aggiunte');
+var
+  LPasso: TPasso;
+  LPrecedente: TJSONObject;
+  LArgSimulazione: TJSONValue;
+  LValore: TJSONValue;
+  LVecchio: TJSONPair;
+  LCampo, LIdPasso, LIdSimulazione: string;
+  LGiaIndicate, LCopiato: Boolean;
+begin
+  for LPasso in FPiano.Passi do
+  begin
+    if LPasso.Tool <> TOOL_APPLICA then
+      Continue;
+    if LPasso.Argomenti = nil then
+      LPasso.Argomenti := TJSONObject.Create;
+
+    LGiaIndicate := False;
+    for LCampo in CAMPI do
+    begin
+      LValore := LPasso.Argomenti.GetValue(LCampo);
+      if (LValore is TJSONArray) and (TJSONArray(LValore).Count > 0) then
+        LGiaIndicate := True;
+    end;
+    if LGiaIndicate then
+      Continue;
+
+    LPrecedente := TArchivioStorici.PassoPrecedenteDiTool(AStato.Esito.ConversationID, TOOL_SIMULA);
+    if LPrecedente = nil then
+      Continue;
+    try
+      LArgSimulazione := LPrecedente.GetValue('argomenti');
+      if not (LArgSimulazione is TJSONObject) then
+        Continue;
+      LIdPasso := TestoCampo(LPasso.Argomenti, 'prodotto_finito_id');
+      LIdSimulazione := TestoCampo(TJSONObject(LArgSimulazione), 'prodotto_finito_id');
+      if (LIdPasso <> '') and (LIdSimulazione <> '') and (LIdPasso <> LIdSimulazione) then
+        Continue;
+
+      LCopiato := False;
+      for LCampo in CAMPI do
+      begin
+        LValore := TJSONObject(LArgSimulazione).GetValue(LCampo);
+        if (LValore is TJSONArray) and (TJSONArray(LValore).Count > 0) then
+        begin
+          LVecchio := LPasso.Argomenti.RemovePair(LCampo);
+          LVecchio.Free;
+          LPasso.Argomenti.AddPair(LCampo, LValore.Clone as TJSONValue);
+          LCopiato := True;
+        end;
+      end;
+      if LCopiato then
+        FNote := FNote + [Format('passo %d: sostituzioni/aggiunte riprese dalla simulazione del turno precedente',
+          [LPasso.Id])];
+    finally
+      LPrecedente.Free;
+    end;
+  end;
+end;
+
 procedure TTurnoPianificato.ControllaPiano(AStato: TStatoTurno);
 var
   LMappa: TDictionary<Integer, Integer>;
@@ -1325,6 +1553,8 @@ begin
   end;
 
   RipristinaPassiPrecedenti(AStato);
+  RecuperaModificheAdattamento(AStato);
+  ImponiAutore(AStato);
 
   // L'ultimo argomento e' il "testo noto" per il controllo dei valori
   // ancorati: la domanda di questo turno piu' lo storico visto dal Planner.
@@ -1404,8 +1634,8 @@ end;
 procedure TTurnoPianificato.PassoSintesi(AStato: TStatoTurno);
 var
   LEsecuzione: TEsitoEsecuzione;
-  LTesto, LBlocco: string;
-  LSoloRitiro: Boolean;
+  LTesto, LBlocco, LBloccoInvio, LBloccoSostituzioni, LBloccoSimulazione: string;
+  LSoloRitiro, LSoloInvio, LSoloSostituzioni, LSoloSimulazione: Boolean;
   LInizio, LFine: Integer;
 begin
   if FEsecutore <> nil then
@@ -1422,6 +1652,46 @@ begin
     LBlocco := TSintesiRisposta.BloccoRiepilogoRitiro(LEsecuzione, LSoloRitiro)
   else
     LBlocco := '';
+
+  // ESITO DELL'INVIO EMAIL (20/10): stesso schema del riepilogo del ritiro.
+  // Se il piano era solo l'invio, il blocco e' la risposta: il modello non
+  // puo' scrivere "inviata con successo" se l'invio e' simulato o fallito.
+  if FArrestoPreventivo = nil then
+  begin
+    LBloccoInvio := TSintesiRisposta.BloccoEsitoInvio(LEsecuzione, LSoloInvio);
+    if LSoloInvio and (LBloccoInvio <> '') then
+    begin
+      Chiudi(AStato, LBloccoInvio, STATO_CONCLUSO, FEtichetta);
+      Exit;
+    end;
+    if LBloccoInvio <> '' then
+      LBlocco := Trim(LBlocco + #10#10 + LBloccoInvio);
+  end;
+
+  // SCELTA DELLE SOSTITUZIONI (20/10, scenario 3): se il piano ha solo letto
+  // la ricetta e cercato i candidati, la risposta la scrive il codice e
+  // rimanda al modulo della chat (vedi BloccoSceltaSostituzioni).
+  if FArrestoPreventivo = nil then
+  begin
+    LBloccoSostituzioni := TSintesiRisposta.BloccoSceltaSostituzioni(LEsecuzione, LSoloSostituzioni);
+    if LSoloSostituzioni and (LBloccoSostituzioni <> '') then
+    begin
+      Chiudi(AStato, LBloccoSostituzioni, STATO_CONCLUSO, FEtichetta);
+      Exit;
+    end;
+  end;
+
+  // ESITO DELLA SIMULAZIONE (20/10, scenario 3): costi, allergeni, unita'
+  // producibili e prezzo suggerito li scrive il codice (BloccoEsitoSimulazione).
+  if FArrestoPreventivo = nil then
+  begin
+    LBloccoSimulazione := TSintesiRisposta.BloccoEsitoSimulazione(LEsecuzione, LSoloSimulazione);
+    if LSoloSimulazione and (LBloccoSimulazione <> '') then
+    begin
+      Chiudi(AStato, LBloccoSimulazione, STATO_CONCLUSO, FEtichetta);
+      Exit;
+    end;
+  end;
 
   // Se il piano era solo il ritiro, il blocco E' la risposta (con la domanda
   // finale fissa): nessuna chiamata al modello, quindi nessun rischio che il
@@ -1457,6 +1727,18 @@ begin
   if (LInizio > 0) and (LFine > LInizio) then
     Delete(LTesto, LInizio, LFine + Length('</think>') - LInizio);
   LTesto := Trim(LTesto);
+
+  // FEEDBACK 19/10 (punto 2), seconda difesa. L'istruzione al modello
+  // (ISTRUZIONI_NESSUNA_SCRITTURA) non basta da sola con un modello piccolo:
+  // se nessuna scrittura e' riuscita e il testo dice comunque "creata" /
+  // "salvata", il codice non si fida e scrive in fondo una nota FISSA che
+  // dice come stanno le cose. Si aggiunge, non si cancella: riscrivere il
+  // testo del modello con una regex rischierebbe di renderlo incoerente.
+  if TSintesiRisposta.DichiaraScritturaNonAvvenuta(LTesto, LEsecuzione) then
+  begin
+    TLog.Write('AGENTE - la sintesi dichiara una scrittura non avvenuta: aggiunta la nota fissa');
+    LTesto := LTesto + #10#10 + TSintesiRisposta.NotaNessunaScrittura;
+  end;
 
   if LBlocco <> '' then
   begin

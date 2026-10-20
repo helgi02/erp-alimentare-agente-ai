@@ -42,9 +42,16 @@ type
   TControllerEmail = class(TMVCController)
   public
     // Corpo:    { "messaggi": [ { "email", "oggetto", "corpo" }, ... ] }
-    // Risposta: { "inviate", "non_inviate",
+    // Risposta: { "inviate", "non_inviate", "stato_invio", "simulato",
+    //             "messaggio",
     //             "dettaglio": [ { "email", "oggetto", "inviata", "errore" } ] }
-    // 400 se un messaggio non e' valido (non parte NESSUNA email).
+    // Codici di stato (20/10):
+    //   200 almeno una email partita (tutte o in parte: stato_invio lo dice)
+    //   400 un messaggio non e' valido (non parte NESSUNA email)
+    //   500 invio non configurato ([SMTP] nell'ini)
+    //   502 nessuna email partita: il server SMTP le ha rifiutate tutte. Il
+    //       corpo e' lo stesso del 200 (con "message" per il frontend), cosi'
+    //       la chat puo' segnare l'errore email per email.
     [MVCPath('/invio')]
     [MVCHTTPMethod([httpPOST])]
     procedure Invia(ctx: TWebContext);
@@ -82,7 +89,7 @@ var
   LBody, LMessaggio, LRisposta, LRiga: TJSONObject;
   LValore: TJSONValue;
   LMessaggi, LDettaglio: TJSONArray;
-  LEmail, LOggetto, LErrore: string;
+  LEmail, LOggetto, LErrore, LStato, LMessaggioEsito: string;
   LInviate, LNonInviate, I: Integer;
   LInviata: Boolean;
 begin
@@ -177,6 +184,12 @@ begin
       end;
       LRisposta.AddPair('inviate', TJSONNumber.Create(LInviate));
       LRisposta.AddPair('non_inviate', TJSONNumber.Create(LNonInviate));
+      // Esito complessivo, uguale a quello dei tool dell'agente (vedi
+      // TEmailServer.DescriviEsito).
+      TEmailServer.DescriviEsito(LInviate, LNonInviate, LStato, LMessaggioEsito);
+      LRisposta.AddPair('stato_invio', LStato);
+      LRisposta.AddPair('simulato', TJSONBool.Create(TEmailServer.InSimulazione));
+      LRisposta.AddPair('messaggio', LMessaggioEsito);
     except
       LRisposta.Free;
       raise;
@@ -184,7 +197,16 @@ begin
 
     // Render prende possesso di LRisposta e lo libera (vedi
     // uControllerDashboard.pas): nessuna Free qui.
-    Render(LRisposta);
+    // Nessuna email partita = la richiesta non ha ottenuto il suo scopo per
+    // colpa del server SMTP: 502 (Bad Gateway), con lo stesso corpo. Il
+    // campo "message" e' quello che App.Http mostra come dettaglio.
+    if LInviate = 0 then
+    begin
+      LRisposta.AddPair('message', LMessaggioEsito);
+      Render(502, LRisposta);
+    end
+    else
+      Render(LRisposta);
   finally
     LValore.Free;
   end;

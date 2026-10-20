@@ -209,6 +209,25 @@ type
   // cosi' il confronto "prima/dopo" e' sempre coerente con le righe
   // davvero coinvolte, anche se l'etichetta del prodotto originale non
   // fosse per qualche motivo perfettamente allineata alla sua ricetta.
+  // Quante unita' di prodotto si possono produrre con la giacenza di UN
+  // componente (20/10, scenario 3, turno 2). La ricetta e' riferita a UNA
+  // unita' di vendita (e' l'ipotesi gia' usata dal costo: "costo per
+  // ricetta" = costo di un'unita'), quindi
+  //   UnitaCoperte = parte intera di Disponibile / QuantitaPerUnita.
+  // Disponibile e' gia' convertita nell'unita' della dose (UnitaMisura): la
+  // giacenza dei lotti puo' essere in kg mentre la dose e' in g.
+  // Calcolabile = False se la giacenza non si puo' convertire (unita' di
+  // grandezze diverse): il componente non entra nel minimo.
+  TCoperturaComponente = record
+    Denominazione: string;
+    IsMateriaPrima: Boolean;
+    QuantitaPerUnita: Currency;
+    UnitaMisura: string;
+    Disponibile: Currency;
+    Calcolabile: Boolean;
+    UnitaCoperte: Int64;
+  end;
+
   TSimulazioneAdattamento = class
   public
     ProdottoFinitoID: Integer;
@@ -223,6 +242,38 @@ type
     // dato parziale che il modello deve presentare come tale al cliente,
     // non come il vero delta economico dell'adattamento.
     CostoCompleto: Boolean;
+
+    // UNITA' PRODUCIBILI (20/10). Minimo delle UnitaCoperte fra i componenti
+    // calcolabili della ricetta simulata (e di quella attuale, per il
+    // confronto). UnitaProducibiliCompleto = False se almeno un componente
+    // non era calcolabile: il numero e' un limite superiore, da dire cosi'.
+    // ComponenteLimitante = il componente che fa da collo di bottiglia
+    // (stringa vuota se la ricetta non ha componenti calcolabili).
+    // Coperture = una voce per componente della ricetta simulata: chi ha
+    // UnitaCoperte = 0 e' una materia prima che MANCA (non basta per una sola
+    // unita').
+    UnitaProducibili: Int64;
+    UnitaProducibiliAttuali: Int64;
+    UnitaProducibiliCompleto: Boolean;
+    ComponenteLimitante: string;
+    Coperture: TArray<TCoperturaComponente>;
+
+    // PREZZO DI VENDITA SUGGERITO (20/10). Il gestionale non ha un listino:
+    // il "prezzo attuale" e' il prezzo_unitario dell'ordine di vendita non
+    // annullato piu' recente del prodotto (o del suo prodotto padre se la
+    // variante non ha ordini), espresso per pezzo. Suggerito = costo
+    // simulato x (prezzo attuale / costo attuale): stesso moltiplicatore di
+    // margine, SOLO costo ingredienti (nessun costo fisso). E' un supporto
+    // alla decisione, non un prezzo definitivo.
+    // PrezzoDisponibile = False -> PrezzoMotivoAssente dice perche' no
+    // (nessun ordine, costo parziale per semilavorati, unita' non in pezzi).
+    PrezzoDisponibile: Boolean;
+    PrezzoMotivoAssente: string;
+    PrezzoAttuale: Currency;
+    PrezzoSuggerito: Currency;
+    MoltiplicatoreMargine: Double;
+    PrezzoFonteOrdine: string;
+    PrezzoFonteData: TDateTime;
 
     AllergeniAttuali: TObjectList<TAllergene>;
     AllergeniSimulati: TObjectList<TAllergene>;
@@ -403,6 +454,40 @@ const
     'JOIN ordini_fornitori o ON o.id = r.ordine_fornitore_id ' +
     'WHERE r.materia_prima_id = :materia_prima_id ' +
     'ORDER BY o.data_ordine DESC ' +
+    'LIMIT 1';
+
+  // GIACENZA PER UNITA' DI MISURA (20/10). La giacenza di una materia prima
+  // e' la somma di quantita_disponibile dei suoi lotti, ma l'unita' non e'
+  // sul lotto: sta sulla riga di DDT da cui il lotto e' nato. Si raggruppa
+  // per unita' cosi' ogni gruppo si converte da solo nell'unita' della dose
+  // (un'unica SUM senza unita' sarebbe sbagliata se una materia prima
+  // arrivasse una volta in kg e una in g).
+  SQL_GIACENZA_MP_PER_UNITA =
+    'SELECT r.unita_misura, COALESCE(SUM(l.quantita_disponibile), 0) AS giacenza ' +
+    'FROM lotti_materie_prime l ' +
+    'JOIN ddt_entrata_righe r ON r.id = l.ddt_entrata_riga_id ' +
+    'WHERE l.materia_prima_id = :materia_prima_id ' +
+    'GROUP BY r.unita_misura';
+
+  // Per i semilavorati l'unita' e' sul lotto stesso.
+  SQL_GIACENZA_SL_PER_UNITA =
+    'SELECT unita_misura, COALESCE(SUM(quantita_disponibile), 0) AS giacenza ' +
+    'FROM lotti_semilavorati ' +
+    'WHERE semilavorato_id = :semilavorato_id ' +
+    'GROUP BY unita_misura';
+
+  // Ordini con data FUTURA esclusi (provato il 20/10: un ordine del 10/11
+  // risultava "prezzo attuale"): contano solo gli ordini fino a oggi.
+  // PREZZO ATTUALE DI VENDITA (20/10): l'ultimo prezzo praticato, cioe' la
+  // riga dell'ordine di vendita piu' recente (non annullato) del prodotto.
+  SQL_PREZZO_VENDITA_RECENTE =
+    'SELECT ovr.prezzo_unitario, ovr.unita_misura, ov.numero_ordine, ov.data_ordine ' +
+    'FROM ordini_vendita_righe ovr ' +
+    'JOIN ordini_vendita ov ON ov.id = ovr.ordine_vendita_id ' +
+    'WHERE ovr.prodotto_finito_id = :prodotto_finito_id ' +
+    '  AND ov.stato <> ''annullato'' ' +
+    '  AND ov.data_ordine <= CURRENT_DATE ' +
+    'ORDER BY ov.data_ordine DESC, ov.id DESC ' +
     'LIMIT 1';
 
 { TCostoRicetta }
@@ -890,6 +975,209 @@ begin
   Result := (AQuantita * FattoreConversione(ADaUnita)) / FattoreConversione(AAUnita);
 end;
 
+// GIACENZA DISPONIBILE di un componente, ESPRESSA nell'unita' della dose
+// (es. lotti in kg, dose in g -> grammi). Somma i gruppi per unita' del
+// componente (vedi SQL_GIACENZA_MP_PER_UNITA). ACalcolabile = False se un
+// gruppo non e' convertibile nell'unita' della dose (grandezze diverse): in
+// quel caso non si inventa un numero.
+function GiacenzaInUnitaDose(AIsMateriaPrima: Boolean; AComponenteID: Integer;
+  const AUnitaDose: string; out ACalcolabile: Boolean): Currency;
+var
+  LAutoQuery: TAutoQuery;
+begin
+  Result := 0;
+  ACalcolabile := True;
+  if AIsMateriaPrima then
+    LAutoQuery := TDB.GetInstance.getQueryResult(SQL_GIACENZA_MP_PER_UNITA, [AComponenteID])
+  else
+    LAutoQuery := TDB.GetInstance.getQueryResult(SQL_GIACENZA_SL_PER_UNITA, [AComponenteID]);
+  try
+    LAutoQuery.Query.First;
+    while not LAutoQuery.Query.Eof do
+    begin
+      try
+        Result := Result + ConvertiQuantita(
+          LAutoQuery.Query.FieldByName('giacenza').AsCurrency,
+          LAutoQuery.Query.FieldByName('unita_misura').AsString,
+          AUnitaDose);
+      except
+        on Exception do
+          ACalcolabile := False;
+      end;
+      LAutoQuery.Query.Next;
+    end;
+  finally
+    LAutoQuery.Free;
+  end;
+end;
+
+// Per ogni riga finale: quante unita' di prodotto copre la giacenza del
+// componente. Vedi TCoperturaComponente. Una dose <= 0 non limita nulla e
+// si segna non calcolabile (non ha senso dividere per zero).
+function CalcolaCoperture(const ARigheFinali: TArray<TRigaFinale>): TArray<TCoperturaComponente>;
+var
+  LRiga: TRigaFinale;
+  LCopertura: TCoperturaComponente;
+  LMateriaPrima: TMateriaPrima;
+  LSemilavorato: TSemilavorato;
+  LLista: TList<TCoperturaComponente>;
+begin
+  LLista := TList<TCoperturaComponente>.Create;
+  try
+    for LRiga in ARigheFinali do
+    begin
+      LCopertura := Default(TCoperturaComponente);
+      LCopertura.IsMateriaPrima := LRiga.IsComponenteMateriaPrima;
+      LCopertura.QuantitaPerUnita := LRiga.QuantitaStandard;
+      LCopertura.UnitaMisura := LRiga.UnitaMisuraDose;
+      if LRiga.IsComponenteMateriaPrima then
+      begin
+        LMateriaPrima := TMateriaPrima.GetByID(LRiga.ComponenteID);
+        try
+          if Assigned(LMateriaPrima) then
+            LCopertura.Denominazione := LMateriaPrima.Denominazione;
+        finally
+          LMateriaPrima.Free;
+        end;
+      end
+      else
+      begin
+        LSemilavorato := TSemilavorato.GetByID(LRiga.ComponenteID);
+        try
+          if Assigned(LSemilavorato) then
+            LCopertura.Denominazione := LSemilavorato.Denominazione;
+        finally
+          LSemilavorato.Free;
+        end;
+      end;
+
+      LCopertura.Disponibile := GiacenzaInUnitaDose(LRiga.IsComponenteMateriaPrima,
+        LRiga.ComponenteID, LRiga.UnitaMisuraDose, LCopertura.Calcolabile);
+      if LRiga.QuantitaStandard <= 0 then
+        LCopertura.Calcolabile := False;
+      if LCopertura.Calcolabile then
+        LCopertura.UnitaCoperte := Trunc(LCopertura.Disponibile / LRiga.QuantitaStandard)
+      else
+        LCopertura.UnitaCoperte := 0;
+      LLista.Add(LCopertura);
+    end;
+    Result := LLista.ToArray;
+  finally
+    LLista.Free;
+  end;
+end;
+
+// Minimo delle unita' coperte fra i componenti CALCOLABILI. AComponenteLimitante
+// = il componente che lo determina. ACompleto = False se almeno un
+// componente non era calcolabile. Senza componenti calcolabili il risultato e'
+// 0 e il limitante resta vuoto.
+function UnitaProducibiliDa(const ACoperture: TArray<TCoperturaComponente>;
+  out AComponenteLimitante: string; out ACompleto: Boolean): Int64;
+var
+  LCopertura: TCoperturaComponente;
+  LTrovato: Boolean;
+begin
+  Result := 0;
+  AComponenteLimitante := '';
+  ACompleto := True;
+  LTrovato := False;
+  for LCopertura in ACoperture do
+  begin
+    if not LCopertura.Calcolabile then
+    begin
+      ACompleto := False;
+      Continue;
+    end;
+    if (not LTrovato) or (LCopertura.UnitaCoperte < Result) then
+    begin
+      Result := LCopertura.UnitaCoperte;
+      AComponenteLimitante := LCopertura.Denominazione;
+      LTrovato := True;
+    end;
+  end;
+end;
+
+// PREZZO DI VENDITA SUGGERITO. Riempie i campi Prezzo* di ASimulazione (che ha
+// gia' i costi). Il prezzo attuale e' quello dell'ultimo ordine non annullato
+// del prodotto, o del suo prodotto padre se la variante non ne ha. Ogni caso
+// in cui il prezzo non si puo' calcolare in modo affidabile lascia
+// PrezzoDisponibile = False con il motivo (mai un numero inventato).
+procedure CalcolaPrezzoSuggerito(ASimulazione: TSimulazioneAdattamento);
+var
+  LProdotto: TProdottoFinito;
+  LAutoQuery: TAutoQuery;
+  LProdottoPrezzoID: Integer;
+  LTrovato: Boolean;
+begin
+  ASimulazione.PrezzoDisponibile := False;
+  LProdottoPrezzoID := ASimulazione.ProdottoFinitoID;
+  LTrovato := False;
+
+  // Fino a due tentativi: il prodotto stesso, poi il suo prodotto padre.
+  while (not LTrovato) and (LProdottoPrezzoID > 0) do
+  begin
+    LAutoQuery := TDB.GetInstance.getQueryResult(SQL_PREZZO_VENDITA_RECENTE, [LProdottoPrezzoID]);
+    try
+      if not LAutoQuery.Query.IsEmpty then
+      begin
+        LTrovato := True;
+        if not SameText(Trim(LAutoQuery.Query.FieldByName('unita_misura').AsString), 'pz') then
+        begin
+          // Prezzo non per pezzo (dati vecchi in kg): non confrontabile con il
+          // costo di UNA ricetta.
+          ASimulazione.PrezzoMotivoAssente := 'il prezzo di vendita registrato e'' espresso per ' +
+            Trim(LAutoQuery.Query.FieldByName('unita_misura').AsString) +
+            ', non per pezzo: non e'' confrontabile con il costo della ricetta';
+          Exit;
+        end;
+        ASimulazione.PrezzoAttuale := LAutoQuery.Query.FieldByName('prezzo_unitario').AsCurrency;
+        ASimulazione.PrezzoFonteOrdine := LAutoQuery.Query.FieldByName('numero_ordine').AsString;
+        ASimulazione.PrezzoFonteData := LAutoQuery.Query.FieldByName('data_ordine').AsDateTime;
+      end;
+    finally
+      LAutoQuery.Free;
+    end;
+
+    if not LTrovato then
+    begin
+      // Nessun ordine: si prova il padre (una sola volta, poi si esce).
+      LProdotto := TProdottoFinito.GetByID(LProdottoPrezzoID);
+      try
+        if Assigned(LProdotto) and (LProdotto.ProdottoFinitoPadreID > 0) and
+           (LProdotto.ProdottoFinitoPadreID <> LProdottoPrezzoID) then
+          LProdottoPrezzoID := LProdotto.ProdottoFinitoPadreID
+        else
+          LProdottoPrezzoID := 0;
+      finally
+        LProdotto.Free;
+      end;
+    end;
+  end;
+
+  if not LTrovato then
+  begin
+    ASimulazione.PrezzoMotivoAssente := 'non risultano ordini di vendita di questo prodotto da cui ricavare il prezzo attuale';
+    Exit;
+  end;
+  if not ASimulazione.CostoCompleto then
+  begin
+    ASimulazione.PrezzoMotivoAssente := 'il costo della ricetta e'' parziale (ci sono semilavorati di cui non si conosce il costo)';
+    Exit;
+  end;
+  if ASimulazione.CostoRicettaAttuale <= 0 then
+  begin
+    ASimulazione.PrezzoMotivoAssente := 'il costo attuale della ricetta e'' zero: non si puo'' ricavare il margine';
+    Exit;
+  end;
+
+  ASimulazione.MoltiplicatoreMargine := ASimulazione.PrezzoAttuale / ASimulazione.CostoRicettaAttuale;
+  // Arrotondato al centesimo (RoundTo non serve: Currency ha 4 decimali, si
+  // porta a 2 con la moltiplicazione e Round per l'intero di centesimi).
+  ASimulazione.PrezzoSuggerito := Round(ASimulazione.CostoRicettaSimulata *
+    ASimulazione.MoltiplicatoreMargine * 100) / 100;
+  ASimulazione.PrezzoDisponibile := True;
+end;
+
 { TServizioRicette }
 
 class function TServizioRicette.CostoUnitarioMateriaPrima(AMateriaPrimaID: Integer;
@@ -1210,6 +1498,8 @@ var
   LRighe: TObjectList<TRicettaProdottoFinitoRiga>;
   LRigheAttuali, LRigheFinali: TArray<TRigaFinale>;
   LCostoAttualeCompleto, LCostoSimulataCompleto: Boolean;
+  LComponenteLimitanteAttuale: string;
+  LCompletoAttuale: Boolean;
 begin
   if (Length(ASostituzioni) = 0) and (Length(AAggiunte) = 0) then
     raise Exception.Create(
@@ -1245,6 +1535,16 @@ begin
     Result.AllergeniSimulati := CalcolaAllergeniRighe(LRigheFinali);
     Result.AllergeniRimossi := SottraiAllergeni(Result.AllergeniAttuali, Result.AllergeniSimulati);
     Result.AllergeniAggiunti := SottraiAllergeni(Result.AllergeniSimulati, Result.AllergeniAttuali);
+
+    // Unita' producibili con la giacenza di oggi, per la ricetta simulata e
+    // per quella attuale (il confronto dice quanto l'adattamento cambia la
+    // capacita' produttiva), poi il prezzo suggerito.
+    Result.Coperture := CalcolaCoperture(LRigheFinali);
+    Result.UnitaProducibili := UnitaProducibiliDa(Result.Coperture,
+      Result.ComponenteLimitante, Result.UnitaProducibiliCompleto);
+    Result.UnitaProducibiliAttuali := UnitaProducibiliDa(CalcolaCoperture(LRigheAttuali),
+      LComponenteLimitanteAttuale, LCompletoAttuale);
+    CalcolaPrezzoSuggerito(Result);
   except
     Result.Free;
     raise;

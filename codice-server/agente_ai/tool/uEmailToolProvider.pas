@@ -251,7 +251,7 @@ end;
 function EseguiInviaEmail(AArguments: TJDOJsonObject): TMCPToolResult;
 var
   LDestinatari: TArray<string>;
-  LOggetto, LCorpo, LErrore, LIndirizzo: string;
+  LOggetto, LCorpo, LErrore, LIndirizzo, LStato, LMessaggioEsito: string;
   LRoot: TJDOJsonObject;
 begin
   // 1. Validazione degli argomenti: errori imputabili al modello, restituiti
@@ -295,6 +295,11 @@ begin
     for LIndirizzo in LDestinatari do
       LRoot.A['destinatari'].Add(LIndirizzo);
     LRoot.S['oggetto'] := LOggetto;
+    // Un solo messaggio: se si arriva qui e' partito (vedi DescriviEsito).
+    TEmailServer.DescriviEsito(1, 0, LStato, LMessaggioEsito);
+    LRoot.S['stato_invio'] := LStato;
+    LRoot.B['simulato'] := TEmailServer.InSimulazione;
+    LRoot.S['messaggio'] := LMessaggioEsito;
     Result := TMCPToolResult.Text(LRoot.ToJSON);
   finally
     LRoot.Free;
@@ -343,7 +348,7 @@ var
   LMessaggio: TMessaggioComposto;
   LRoot, LRiga: TJDOJsonObject;
   LDettaglio: TJDOJsonArray;
-  LErrore, LPrimoErrore: string;
+  LErrore, LPrimoErrore, LStato, LMessaggioEsito: string;
   LInviate, LNonInviate: Integer;
   LInviata: Boolean;
 begin
@@ -393,6 +398,12 @@ begin
     end;
     LRoot.I['inviate'] := LInviate;
     LRoot.I['non_inviate'] := LNonInviate;
+    // Esito complessivo (20/10): lo legge il testo fisso della risposta
+    // (TSintesiRisposta.BloccoEsitoInvio) e il riquadro della chat.
+    TEmailServer.DescriviEsito(LInviate, LNonInviate, LStato, LMessaggioEsito);
+    LRoot.S['stato_invio'] := LStato;
+    LRoot.B['simulato'] := TEmailServer.InSimulazione;
+    LRoot.S['messaggio'] := LMessaggioEsito;
 
     // Nessuna email partita: e' un fallimento del tool, non un esito "ok".
     if LInviate = 0 then
@@ -510,10 +521,17 @@ end;
 // ---------------------------------------------------------------------------
 
 const
+  // Campi dell'esito complessivo (20/10), comuni ai due tool di invio.
+  // Facoltativi nello schema: un piano non deve farvi riferimento.
+  PROPRIETA_ESITO_INVIO =
+    '"stato_invio":{"type":"string","enum":["tutte_inviate","parziale","nessuna_inviata"]},' +
+    '"simulato":{"type":"boolean"},"messaggio":{"type":"string"}';
+
   SCHEMA_OUTPUT_INVIA_EMAIL =
     '{"type":"object","properties":{"esito":{"type":"string","enum":["ok"]},' +
     '"destinatari":{"type":"array","items":{"type":"string"}},' +
-    '"oggetto":{"type":"string"}},"required":["esito","destinatari","oggetto"]}';
+    '"oggetto":{"type":"string"},' + PROPRIETA_ESITO_INVIO + '},' +
+    '"required":["esito","destinatari","oggetto"]}';
 
   SCHEMA_OUTPUT_ANTEPRIMA_DA_MODELLO =
     '{"type":"object","properties":{"esito":{"type":"string","enum":["ok"]},' +
@@ -529,7 +547,7 @@ const
     '"email":{"type":"string"},"modello":{"type":"string"},"oggetto":{"type":"string"},' +
     '"inviata":{"type":"boolean"},"errore":{"type":"string"}},' +
     '"required":["email","modello","oggetto","inviata","errore"]}},' +
-    '"inviate":{"type":"integer"},"non_inviate":{"type":"integer"}},' +
+    '"inviate":{"type":"integer"},"non_inviate":{"type":"integer"},' + PROPRIETA_ESITO_INVIO + '},' +
     '"required":["esito","dettaglio","inviate","non_inviate"]}';
 
   VINCOLO_DESTINATARI =

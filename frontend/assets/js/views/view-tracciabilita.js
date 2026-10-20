@@ -259,15 +259,17 @@
                     collegamentoProdottiFiniti(l, prodottiFiniti) +
                 '</td>' +
                 '<td><code>' + U.esc(l.codice_lotto) + '</code></td>' +
-                '<td>' + badgeDirettezza(l.consumato_direttamente) + '</td>' +
-                '<td class="text-end">' + U.fmtNum(l.quantita_consumata, 2) + ' ' + U.esc(l.unita_misura_consumata || l.unita_misura || '') + '</td>' +
+                // Un lotto compare UNA volta anche se raggiunto da piu'
+                // consumi: una riga per percorso (stesso schema dei
+                // prodotti finiti, vedi percorsiDi/rigaPercorso).
+                '<td class="small">' + percorsiDi(l).map(rigaPercorso).join('') + '</td>' +
                 '<td class="text-end">' + U.fmtNum(l.quantita_disponibile, 2) + ' ' + U.esc(l.unita_misura || '') + '</td>' +
             '</tr>'
         ).join('');
 
         return U.tabella([
-            { testo: 'Semilavorato' }, { testo: 'Lotto' }, { testo: 'Consumo' },
-            { testo: 'Quantit&agrave; consumata', allineaDx: true },
+            { testo: 'Semilavorato' }, { testo: 'Lotto' },
+            { testo: 'Consumo e quantit&agrave; consumata', allineaDx: true },
             { testo: 'In magazzino', allineaDx: true }
         ], righe);
     }
@@ -293,6 +295,7 @@
     // voce di "percorsi" (vedi AggiungiProdottoFinitoRaggiunto lato
     // backend). Le quantita' dei percorsi riguardano componenti diversi:
     // si mostrano una per riga, non si sommano.
+    // Vale anche per i lotti di semilavorato (19/10): stesso formato.
     // Compatibilita': un elemento senza "percorsi" (formato precedente,
     // ancora usato dai dati demo) e' trattato come un percorso unico.
     function percorsiDi(pf) {

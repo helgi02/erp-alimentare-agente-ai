@@ -33,9 +33,17 @@ uses
   System.SysUtils,
   System.JSON,
   System.Generics.Collections,
+  System.RegularExpressions,
   uPianificatore,
   uValidatorePiano,
   uEsecutorePiano;
+
+const
+  // Domanda finale FISSA del riepilogo di ritiro quando ci sono clienti
+  // coinvolti. E' pubblica perche' il turno successivo la riconosce: se
+  // l'utente risponde "si'", il piano non lo scrive il modello ma il codice
+  // (TTurnoPianificato.PianoAnteprimaEmail).
+  PROPOSTA_ANTEPRIMA_EMAIL = 'Vuoi che ti mostri l''anteprima delle email per i clienti coinvolti?';
 
 type
   TSintesiRisposta = class
@@ -72,6 +80,39 @@ type
     // all'utente quale dato manca invece del messaggio generico.
     class function TestoPianoNonValidoPer(const AErrori: TArray<TErroreValidazione>): string;
     class function TestoAnnullata: string;
+    // ESITO DI UN INVIO EMAIL (20/10), scritto dal codice come il riepilogo
+    // del ritiro: prima la frase complessiva del tool ("Email inviate: 4 su
+    // 5", con l'avviso se l'invio e' simulato), poi una riga per email.
+    // Se l'invio e' fallito del tutto, il motivo. Stringa vuota se nel piano
+    // non c'e' un invio. ASoloInvio = True se TUTTI i passi eseguiti sono
+    // invii: allora il blocco e' l'intera risposta e il modello non serve.
+    class function BloccoEsitoInvio(AEsecuzione: TEsitoEsecuzione;
+      out ASoloInvio: Boolean): string;
+    // SCELTA DELLE SOSTITUZIONI (20/10, scenario 3, primo turno). Quando il piano
+    // ha solo letto la ricetta e cercato i candidati senza un allergene, la
+    // risposta la scrive il codice: ingredienti della ricetta che contengono
+    // l'allergene, quanti candidati ci sono, e l'invito a usare il modulo
+    // della chat. Il modello, lasciato libero, scriveva "ho simulato" (non era
+    // vero), inventava il nome del nuovo prodotto (lo sceglie l'utente nel
+    // modulo di conferma) e chiedeva "vuoi applicare?" saltando la simulazione.
+    // ASoloRicerca = True se TUTTI i passi sono questi due e sono riusciti:
+    // allora il blocco e' l'intera risposta e il modello non serve.
+    class function BloccoSceltaSostituzioni(AEsecuzione: TEsitoEsecuzione;
+      out ASoloRicerca: Boolean): string;
+    // ESITO DELLA SIMULAZIONE (20/10, scenario 3, secondo turno). Costi,
+    // allergeni, unita' producibili e prezzo suggerito li scrive il codice
+    // dal risultato del tool: il modello, lasciato libero, copiava i numeri
+    // con segni sbagliati ("risparmio -0,32") e li presentava a modo suo.
+    // ASoloSimulazione = True se TUTTI i passi sono simulazioni riuscite:
+    // allora il blocco e' l'intera risposta e il modello non serve.
+    class function BloccoEsitoSimulazione(AEsecuzione: TEsitoEsecuzione;
+      out ASoloSimulazione: Boolean): string;
+    // FEEDBACK 19/10 (punto 2), controllo sul testo. True se nel turno non e'
+    // riuscita nessuna scrittura ma ATesto dichiara un salvataggio/creazione
+    // avvenuti (es. "e' stata creata", "salvata nel gestionale").
+    class function DichiaraScritturaNonAvvenuta(const ATesto: string;
+      AEsecuzione: TEsitoEsecuzione): Boolean;
+    class function NotaNessunaScrittura: string;
     // Testo fisso quando l'utente rifiuta una proposta dell'assistente.
     class function TestoPropostaRifiutata: string;
   end;
@@ -85,9 +126,16 @@ implementation
 uses
   System.Generics.Defaults,
   System.StrUtils,
+  uContrattiTool,
   uSchemaJSON,
   uStoricoTurni,
-  uPromptPianificatore;
+  uPromptPianificatore,
+  // Solo per TestoConferma (20/10): tradurre gli id di prodotti e
+  // componenti nei loro nomi. Sono letture puntuali in anagrafica; e'
+  // l'unico punto di questa unit che legge il database.
+  uModelProdottoFinito,
+  uModelMateriaPrima,
+  uModelSemilavorato;
 
 function JSONIndentatoComePython(AValore: TJSONValue; ALivello: Integer): string;
 var
@@ -140,6 +188,9 @@ end;
 const
   TOOL_APRI_NC = 'apri_non_conformita_materia_prima';
   TOOL_SPEDIZIONI = 'trova_ordini_spedizioni_lotto_prodotto_finito';
+  TOOL_RICETTA = 'get_ricetta_prodotto_finito';
+  TOOL_CERCA_COMPONENTI = 'cerca_componenti_ricetta';
+  TOOL_SIMULA = 'simula_adattamento_ricetta';
 
   // Istruzioni aggiunte al Synthesizer quando il riepilogo dei dati e' gia'
   // stato scritto dal server (vedi BloccoRiepilogoRitiro): il modello non
@@ -154,6 +205,38 @@ const
     'avvisare). NON ripetere codici, lotti, quantita'', prodotti o clienti e non fare elenchi. Se un altro ' +
     'passo ha prodotto risultati (ad esempio le email), puoi citarlo. Se non hai nulla da aggiungere ' +
     'rispondi soltanto: NESSUN_COMMENTO'#10;
+
+  // FEEDBACK 19/10 (punto 2): istruzione aggiunta al Synthesizer quando nel
+  // turno NON e' riuscito nessun tool di scrittura (es. e' stata eseguita
+  // solo la simulazione dell'adattamento ricetta, o la scrittura e' ferma in
+  // attesa di conferma). In una prova su sei il modello aveva scritto "la
+  // variante e' stata salvata nel gestionale" dopo la sola simulazione.
+  // E' la prima difesa; la seconda e' il controllo sul testo in
+  // TTurnoPianificato.PassoSintesi (vedi DichiaraScrittura).
+  ISTRUZIONI_NESSUNA_SCRITTURA =
+    #10 +
+    'NESSUNA SCRITTURA IN QUESTO TURNO'#10 +
+    'In questo turno nel gestionale NON e'' stato creato, salvato, modificato, registrato o inviato ' +
+    'nulla ("scritture_eseguite": false). Non scrivere che qualcosa e'' stato creato, salvato, aperto, ' +
+    'registrato o inviato. Se e'' stata fatta una simulazione, dillo chiaramente ("simulazione", ' +
+    '"nulla e'' stato salvato") e, se serve, chiedi se procedere con il salvataggio.'#10;
+
+// True se almeno un passo di SCRITTURA (secondo il contratto del tool) e'
+// stato eseguito con esito positivo in questo turno. Una scrittura ferma in
+// CONFERMA_RICHIESTA non conta: non e' ancora avvenuta.
+function ScritturaEseguita(AEsecuzione: TEsitoEsecuzione): Boolean;
+var
+  LEsito: TEsitoPasso;
+  LContratto: TContrattoTool;
+begin
+  Result := False;
+  if AEsecuzione = nil then
+    Exit;
+  for LEsito in AEsecuzione.Esiti do
+    if (LEsito.Esito = 'ok') and TRegistroContrattiTool.Trova(LEsito.Tool, LContratto) and
+       (LContratto.Effetto = etScrittura) then
+      Exit(True);
+end;
 
 // --- Lettura dei campi di un oggetto JSON, senza eccezioni se manca ---------
 
@@ -423,6 +506,62 @@ end;
 
 { TSintesiRisposta }
 
+// FEEDBACK 20/10 (prova vendite): il modello scriveva "Il gestionale ha gia'
+// aperto la schermata" mentre sotto la risposta c'era solo un PULSANTE, anche se
+// il prompt gli vietava di nominare schermata e pulsante. Un divieto scritto nel
+// prompt non e' una garanzia (Qwen 9B non lo rispetta sempre): se non vuole che
+// il modello ne parli, il dato non gli si deve dare. Il frontend riceve il
+// risultato completo dal campo tool_calls della risposta e costruisce il
+// pulsante da li'; qui si toglie solo la COPIA mandata al Synthesizer.
+// Si tolgono "apertura_vista" / "aperture_vista" quando sono TUTTE in modalita'
+// "pulsante". Una vista aperta direttamente (senza "modalita") resta, perche'
+// in quel caso la schermata si apre davvero e il modello puo' dirlo.
+// AValore e' una copia gia' ridotta, di proprieta' del chiamante: si modifica
+// sul posto e la si restituisce.
+function TogliVistePulsante(AValore: TJSONValue): TJSONValue;
+var
+  LObj: TJSONObject;
+  LVista: TJSONValue;
+  LArray: TJSONArray;
+  LElemento: TJSONValue;
+  LTutte: Boolean;
+  LPulsante: string;
+  LCoppia: TJSONPair;
+begin
+  Result := AValore;
+  if not (AValore is TJSONObject) then
+    Exit;
+  LObj := TJSONObject(AValore);
+
+  // Una sola vista: {"vista":..., "modalita":"pulsante", "parametri":...}
+  LVista := LObj.GetValue('apertura_vista');
+  if (LVista is TJSONObject) and
+     TJSONObject(LVista).TryGetValue<string>('modalita', LPulsante) and
+     (LPulsante = 'pulsante') then
+  begin
+    LCoppia := LObj.RemovePair('apertura_vista');
+    LCoppia.Free;
+  end;
+
+  // Piu' viste (es. una per ogni non conformita' aperta).
+  LVista := LObj.GetValue('aperture_vista');
+  if (LVista is TJSONArray) then
+  begin
+    LArray := TJSONArray(LVista);
+    LTutte := LArray.Count > 0;
+    for LElemento in LArray do
+      if not ((LElemento is TJSONObject) and
+              TJSONObject(LElemento).TryGetValue<string>('modalita', LPulsante) and
+              (LPulsante = 'pulsante')) then
+        LTutte := False;
+    if LTutte then
+    begin
+      LCoppia := LObj.RemovePair('aperture_vista');
+      LCoppia.Free;
+    end;
+  end;
+end;
+
 class function TSintesiRisposta.RichiestaSintesi(const ADomanda, AOggi: string; APiano: TPiano;
   AEsecuzione: TEsitoEsecuzione; AArrestoPreventivo: TJSONObject;
   const ARiepilogoMostrato: string): TJSONObject;
@@ -502,7 +641,7 @@ begin
            ((LEsito.Tool = TOOL_APRI_NC) or (LEsito.Tool = TOOL_SPEDIZIONI)) then
           LVoce.AddPair('output', 'mostrato nel riepilogo')
         else if LEsito.Output <> nil then
-          LVoce.AddPair('output', RiduciOutput(LEsito.Output, 50, True))
+          LVoce.AddPair('output', TogliVistePulsante(RiduciOutput(LEsito.Output, 50, True)))
         else
           LVoce.AddPair('output', TJSONNull.Create);
       end;
@@ -532,7 +671,7 @@ begin
           begin
             LCoppiaTolta := LVoce.RemovePair('output');
             LCoppiaTolta.Free;
-            LVoce.AddPair('output', RiduciOutput(LEsito.Output, RIDUZIONI[j], True));
+            LVoce.AddPair('output', TogliVistePulsante(RiduciOutput(LEsito.Output, RIDUZIONI[j], True)));
           end;
         end;
       end;
@@ -540,11 +679,16 @@ begin
     if AArrestoPreventivo <> nil then
       LDati.AddPair('arresto', AArrestoPreventivo.Clone as TJSONValue);
 
+    // FEEDBACK 19/10 (punto 2): il modello deve sapere, come FATTO e non da
+    // dedurre, se nel turno qualcosa e' stato scritto nel gestionale.
+    LDati.AddPair('scritture_eseguite', TJSONBool.Create(ScritturaEseguita(AEsecuzione)));
+
     LMessaggi := TJSONArray.Create;
     LMessaggi.AddElement(TJSONObject.Create
       .AddPair('role', 'system')
       .AddPair('content', TPianificatore.PromptBase(AOggi) + PROMPT_SEZIONE_SINTESI +
-        IfThen(ARiepilogoMostrato <> '', ISTRUZIONI_COMMENTO, '')));
+        IfThen(ARiepilogoMostrato <> '', ISTRUZIONI_COMMENTO, '') +
+        IfThen(not ScritturaEseguita(AEsecuzione), ISTRUZIONI_NESSUNA_SCRITTURA, '')));
     LMessaggi.AddElement(TJSONObject.Create
       .AddPair('role', 'user')
       .AddPair('content', PROMPT_MESSAGGIO_SINTESI_RICHIESTA + ADomanda +
@@ -558,43 +702,370 @@ begin
   end;
 end;
 
-class function TSintesiRisposta.TestoConferma(const ATool: string; AArgomenti: TJSONObject): string;
+// --- Richiesta di conferma in forma leggibile (20/10) ---------------------
+// Prima: "Operazione: applica_adattamento_ricetta / Dati: {JSON}". Ora una
+// frase per operazione, con i nomi al posto degli id. L'utente conferma
+// QUELLO che legge, quindi il testo deve descrivere esattamente gli
+// argomenti che verranno usati: nessun dato e' omesso o riassunto, cambia
+// solo la forma. Tool di scrittura non previsti qui: elenco "campo: valore"
+// generico, comunque senza JSON.
+
+function NomeProdottoFinito(const AIDTesto: string): string;
+var
+  LID: Integer;
+  LProdotto: TProdottoFinito;
 begin
-  Result :=
-    'Per procedere serve la tua conferma, perche'' l''operazione modifica i dati del gestionale.' + #10 +
-    'Operazione: ' + ATool + #10 +
-    'Dati: ' + JSONComePython(AArgomenti) + #10 +
-    'Confermi?';
+  Result := AIDTesto;                   // codice o testo: si mostra com'e'
+  if not TryStrToInt(Trim(AIDTesto), LID) then
+    Exit;
+  try
+    LProdotto := TProdottoFinito.GetByID(LID);
+    if LProdotto <> nil then
+      try
+        Result := LProdotto.Denominazione + ' (' + LProdotto.Codice + ')';
+      finally
+        LProdotto.Free;
+      end;
+  except
+    // Lettura non riuscita: resta l'id, la conferma non deve fallire.
+  end;
+end;
+
+function NomeComponente(const ATipo: string; AID: Integer): string;
+var
+  LMateria: TMateriaPrima;
+  LSemi: TSemilavorato;
+begin
+  Result := Format('componente %d', [AID]);
+  try
+    if ATipo = 'semilavorato' then
+    begin
+      LSemi := TSemilavorato.GetByID(AID);
+      if LSemi <> nil then
+        try
+          Result := LSemi.Denominazione;
+        finally
+          LSemi.Free;
+        end;
+    end
+    else
+    begin
+      LMateria := TMateriaPrima.GetByID(AID);
+      if LMateria <> nil then
+        try
+          Result := LMateria.Denominazione;
+        finally
+          LMateria.Free;
+        end;
+    end;
+  except
+  end;
+end;
+
+// Il componente di una sostituzione/aggiunta: il nome se il modello l'ha
+// scritto (ANomeChiave), altrimenti l'id tradotto (AIdChiave + ATipoChiave).
+function ComponenteDi(AObj: TJSONObject; const ANomeChiave, AIdChiave, ATipoChiave: string): string;
+var
+  LID: Integer;
+begin
+  Result := CampoStringa(AObj, ANomeChiave);
+  if Result <> '' then
+    Exit;
+  if TryStrToInt(CampoStringa(AObj, AIdChiave), LID) then
+    Result := NomeComponente(CampoStringa(AObj, ATipoChiave), LID)
+  else
+    Result := '?';
+end;
+
+function QuantitaDi(AObj: TJSONObject; const AQuantita, AUnita: string): string;
+begin
+  Result := '';
+  if CampoStringa(AObj, AQuantita) <> '' then
+    Result := Trim(NumeroIt(CampoNumero(AObj, AQuantita)) + ' ' + CampoStringa(AObj, AUnita));
+end;
+
+// Valore qualsiasi in testo semplice: array di valori -> "a, b"; oggetto ->
+// "chiave: valore; ..."; mai parentesi graffe.
+function ValoreInTesto(AValore: TJSONValue): string;
+var
+  LPezzi: TList<string>;
+  LElemento: TJSONValue;
+  LCoppia: TJSONPair;
+begin
+  if (AValore = nil) or (AValore is TJSONNull) then
+    Exit('');
+  if not ((AValore is TJSONArray) or (AValore is TJSONObject)) then
+    Exit(AValore.Value);
+  LPezzi := TList<string>.Create;
+  try
+    if AValore is TJSONArray then
+      for LElemento in TJSONArray(AValore) do
+        LPezzi.Add(ValoreInTesto(LElemento))
+    else
+      for LCoppia in TJSONObject(AValore) do
+        LPezzi.Add(StringReplace(LCoppia.JsonString.Value, '_', ' ', [rfReplaceAll]) + ': ' +
+          ValoreInTesto(LCoppia.JsonValue));
+    if AValore is TJSONArray then
+      Result := string.Join(', ', LPezzi.ToArray)
+    else
+      Result := string.Join('; ', LPezzi.ToArray);
+  finally
+    LPezzi.Free;
+  end;
+end;
+
+class function TSintesiRisposta.TestoConferma(const ATool: string; AArgomenti: TJSONObject): string;
+var
+  LRighe: TList<string>;
+  LElenco: TJSONArray;
+  LVoce: TJSONValue;
+  LObj, LVariabili: TJSONObject;
+  LQuantita, LProdotto, LDestinatario: string;
+  LCoppia: TJSONPair;
+begin
+  LRighe := TList<string>.Create;
+  try
+    LRighe.Add('Per procedere serve la tua conferma, perche'' l''operazione modifica i dati del gestionale.');
+    LRighe.Add('');
+
+    if ATool = 'apri_non_conformita_materia_prima' then
+    begin
+      LRighe.Add('Apro la non conformita'' ' + CampoStringa(AArgomenti, 'codice_non_conformita_base'));
+      LRighe.Add('- Lotti di materia prima: ' + ValoreInTesto(AArgomenti.GetValue('codici_lotto_materia_prima')));
+      LRighe.Add('- Motivo: ' + CampoStringa(AArgomenti, 'motivo_non_conformita'));
+    end
+
+    else if ATool = 'applica_adattamento_ricetta' then
+    begin
+      LProdotto := CampoStringa(AArgomenti, 'nome_prodotto');
+      if CampoStringa(AArgomenti, 'prodotto_finito_id') <> '' then
+        LProdotto := NomeProdottoFinito(CampoStringa(AArgomenti, 'prodotto_finito_id'));
+      LRighe.Add('Salvo l''adattamento della ricetta di ' + LProdotto);
+      LElenco := CampoElenco(AArgomenti, 'sostituzioni');
+      if LElenco <> nil then
+        for LVoce in LElenco do
+          if LVoce is TJSONObject then
+          begin
+            LObj := TJSONObject(LVoce);
+            LQuantita := QuantitaDi(LObj, 'nuova_quantita', 'nuova_unita_misura');
+            LRighe.Add('- Sostituisco ' + ComponenteDi(LObj, 'vecchio_nome', 'vecchio_id', 'vecchio_tipo') +
+              ' con ' + ComponenteDi(LObj, 'nuovo_nome', 'nuovo_id', 'nuovo_tipo') +
+              IfThen(LQuantita <> '', ' (' + LQuantita + ')', ''));
+          end;
+      LElenco := CampoElenco(AArgomenti, 'aggiunte');
+      if LElenco <> nil then
+        for LVoce in LElenco do
+          if LVoce is TJSONObject then
+          begin
+            LObj := TJSONObject(LVoce);
+            LQuantita := QuantitaDi(LObj, 'quantita', 'unita_misura');
+            LRighe.Add('- Aggiungo ' + ComponenteDi(LObj, 'nome', 'id', 'tipo') +
+              IfThen(LQuantita <> '', ' (' + LQuantita + ')', ''));
+          end;
+      if CampoStringa(AArgomenti, 'codice_nuovo_prodotto') <> '' then
+        LRighe.Add('- Nuovo prodotto: ' + CampoStringa(AArgomenti, 'denominazione_nuovo_prodotto') +
+          ' (' + CampoStringa(AArgomenti, 'codice_nuovo_prodotto') + ')')
+      else
+        LRighe.Add('- Nuovo prodotto: non indicato (se non esiste gia'' una variante compatibile ' +
+          'ti chiedero'' codice e denominazione)');
+    end
+
+    else if ATool = 'invia_email' then
+    begin
+      LRighe.Add('Invio un''email');
+      LRighe.Add('- A: ' + ValoreInTesto(AArgomenti.GetValue('destinatari')));
+      LRighe.Add('- Oggetto: ' + CampoStringa(AArgomenti, 'oggetto'));
+      LRighe.Add('- Testo:');
+      LRighe.Add(CampoStringa(AArgomenti, 'corpo'));
+    end
+
+    else if ATool = 'invia_email_da_modello' then
+    begin
+      LElenco := CampoElenco(AArgomenti, 'messaggi');
+      if LElenco <> nil then
+        LRighe.Add(Format('Invio %d email (testi come nell''anteprima):', [LElenco.Count]))
+      else
+        LRighe.Add('Invio le email');
+      if LElenco <> nil then
+        for LVoce in LElenco do
+          if LVoce is TJSONObject then
+          begin
+            LObj := TJSONObject(LVoce);
+            LDestinatario := CampoStringa(LObj, 'email');
+            if LObj.GetValue('variabili') is TJSONObject then
+            begin
+              LVariabili := TJSONObject(LObj.GetValue('variabili'));
+              if CampoStringa(LVariabili, 'ragione_sociale') <> '' then
+                LDestinatario := CampoStringa(LVariabili, 'ragione_sociale') + ' <' + LDestinatario + '>';
+            end;
+            LRighe.Add('- ' + LDestinatario);
+          end;
+    end
+
+    else
+    begin
+      // Tool di scrittura non previsto sopra: elenco generico.
+      LRighe.Add('Operazione: ' + StringReplace(ATool, '_', ' ', [rfReplaceAll]));
+      if AArgomenti <> nil then
+        for LCoppia in AArgomenti do
+          LRighe.Add('- ' + StringReplace(LCoppia.JsonString.Value, '_', ' ', [rfReplaceAll]) + ': ' +
+            ValoreInTesto(LCoppia.JsonValue));
+    end;
+
+    if (AArgomenti <> nil) and (CampoStringa(AArgomenti, 'creato_da') <> '') and
+       (ATool <> 'invia_email') and (ATool <> 'invia_email_da_modello') then
+      LRighe.Add('- Autorizzato da: ' + CampoStringa(AArgomenti, 'creato_da'));
+
+    LRighe.Add('');
+    LRighe.Add('Confermi?');
+    Result := string.Join(#10, LRighe.ToArray);
+  finally
+    LRighe.Free;
+  end;
+end;
+
+// --- Disambiguazione in forma leggibile (20/10) -------------------------
+// Prima ogni candidato era stampato come JSON grezzo
+// ({"id": 3, "codice": "PF003", ...}) e la riga del problema riportava il
+// nome tecnico del parametro ("nome_prodotto"). L'utente non deve vedere
+// ne' l'uno ne' l'altro: i pulsanti di scelta della chat (che usano gli id)
+// restano, il testo diventa una frase per problema e una riga per candidato.
+
+// Come chiamare il parametro in italiano. Un campo non previsto (tool nuovo)
+// prende una descrizione generica invece del nome tecnico.
+function DescriviCampo(const ACampo: string): string;
+begin
+  if (ACampo = 'nome_prodotto') or (ACampo = 'prodotto_finito_id') then
+    Result := 'prodotto'
+  else if ACampo = 'ragione_sociale_cliente' then
+    Result := 'cliente'
+  else if ACampo = 'codici_lotto_materia_prima' then
+    Result := 'lotto di materia prima'
+  else if ACampo = 'vecchio_nome' then
+    Result := 'componente da sostituire'
+  else if ACampo = 'nuovo_nome' then
+    Result := 'componente sostitutivo'
+  else if ACampo = 'nome' then
+    Result := 'componente da aggiungere'
+  else
+    Result := 'valore';
+end;
+
+// Una riga leggibile per un candidato, qualunque tool l'abbia prodotto.
+// Forme note: prodotto {codice, denominazione}; componente {tipo, codice,
+// denominazione}; cliente {ragione_sociale, partita_iva?}; lotto
+// {codice_lotto, materia_prima, data_scadenza}. Nome principale + dettagli
+// fra parentesi; l'id (chiave tecnica) non si mostra mai.
+function DescriviCandidato(ACandidato: TJSONValue): string;
+var
+  LObj: TJSONObject;
+  LNome, LValore: string;
+  LDettagli: TList<string>;
+  LCoppia: TJSONPair;
+begin
+  if not (ACandidato is TJSONObject) then
+    Exit(Trim(ACandidato.Value));
+  LObj := TJSONObject(ACandidato);
+
+  LNome := CampoStringa(LObj, 'denominazione');
+  if LNome = '' then
+    LNome := CampoStringa(LObj, 'ragione_sociale');
+  if LNome = '' then
+    LNome := CampoStringa(LObj, 'codice_lotto');
+  if LNome = '' then
+    LNome := CampoStringa(LObj, 'nome');
+
+  LDettagli := TList<string>.Create;
+  try
+    LValore := CampoStringa(LObj, 'codice');
+    if (LValore <> '') and (LValore <> LNome) then
+      LDettagli.Add(LValore);
+    LValore := CampoStringa(LObj, 'tipo');
+    if LValore = 'materia_prima' then
+      LDettagli.Add('materia prima')
+    else if LValore <> '' then
+      LDettagli.Add(LValore);
+    LValore := CampoStringa(LObj, 'materia_prima');
+    if LValore <> '' then
+      LDettagli.Add(LValore);
+    LValore := CampoStringa(LObj, 'data_scadenza');
+    if LValore <> '' then
+      LDettagli.Add('scadenza ' + DataIt(LValore));
+    LValore := CampoStringa(LObj, 'partita_iva');
+    if LValore <> '' then
+      LDettagli.Add('P.IVA ' + LValore);
+
+    // Forma sconosciuta: i valori di testo, senza chiavi e senza id.
+    if (LNome = '') and (LDettagli.Count = 0) then
+      for LCoppia in LObj do
+        if (LCoppia.JsonString.Value <> 'id') and (LCoppia.JsonValue is TJSONString) and
+           (Trim(LCoppia.JsonValue.Value) <> '') then
+          LDettagli.Add(LCoppia.JsonValue.Value);
+
+    if LNome = '' then
+      Result := string.Join(', ', LDettagli.ToArray)
+    else if LDettagli.Count > 0 then
+      Result := LNome + ' (' + string.Join(', ', LDettagli.ToArray) + ')'
+    else
+      Result := LNome;
+  finally
+    LDettagli.Free;
+  end;
 end;
 
 class function TSintesiRisposta.TestoDisambiguazione(AProblemi: TJSONValue): string;
 var
   LRighe: TList<string>;
   LProblema, LCandidati: TJSONValue;
-  LCosa: string;
-  i, j: Integer;
+  LCercato, LCosa: string;
+  LCandidatiNum, i, j: Integer;
+  LQualcunaScelta: Boolean;
 begin
   LRighe := TList<string>.Create;
   try
-    LRighe.Add('Mi serve una tua scelta prima di proseguire.');
+    // FEEDBACK 20/10 (prova vendite, cliente inesistente): con un valore
+    // "non trovato" e NESSUN candidato simile non c'e' niente da scegliere, e
+    // l'intestazione "Mi serve una tua scelta" confondeva. L'intestazione si
+    // decide dopo aver visto i problemi: si scrive "scelta" solo se almeno un
+    // problema offre dei candidati.
+    LQualcunaScelta := False;
+    LRighe.Add('');                    // segnaposto: l'intestazione si mette in fondo
     if AProblemi is TJSONArray then
       for i := 0 to TJSONArray(AProblemi).Count - 1 do
       begin
         LProblema := TJSONArray(AProblemi).Items[i];
         if not (LProblema is TJSONObject) then
           Continue;
-        if TestoCampo(TJSONObject(LProblema), 'tipo') = 'non_trovato' then
-          LCosa := 'non trovato'
-        else
-          LCosa := 'piu'' corrispondenze';
-        LRighe.Add(Format('- "%s" (%s): %s',
-          [TestoCampo(TJSONObject(LProblema), 'valore_cercato'),
-           TestoCampo(TJSONObject(LProblema), 'campo'), LCosa]));
+        LCercato := TestoCampo(TJSONObject(LProblema), 'valore_cercato');
+        LCosa := DescriviCampo(TestoCampo(TJSONObject(LProblema), 'campo'));
         LCandidati := TJSONObject(LProblema).GetValue('candidati');
+        LCandidatiNum := 0;
         if LCandidati is TJSONArray then
-          for j := 0 to TJSONArray(LCandidati).Count - 1 do
-            LRighe.Add('    ' + JSONComePython(TJSONArray(LCandidati).Items[j]));
+          LCandidatiNum := TJSONArray(LCandidati).Count;
+        if LCandidatiNum > 0 then
+          LQualcunaScelta := True;
+
+        if TestoCampo(TJSONObject(LProblema), 'tipo') = 'non_trovato' then
+        begin
+          if LCandidatiNum > 0 then
+            LRighe.Add(Format('- Non trovo il %s "%s". Forse intendevi uno di questi:', [LCosa, LCercato]))
+          else
+            LRighe.Add(Format('- Non trovo il %s "%s".', [LCosa, LCercato]));
+        end
+        else
+          LRighe.Add(Format('- Per il %s "%s" ho trovato piu'' corrispondenze:', [LCosa, LCercato]));
+
+        for j := 0 to LCandidatiNum - 1 do
+          LRighe.Add('    - ' + DescriviCandidato(TJSONArray(LCandidati).Items[j]));
       end;
+    if LQualcunaScelta then
+      LRighe[0] := 'Mi serve una tua scelta prima di proseguire.'
+    else
+    begin
+      // Nessun candidato: l'utente puo' solo correggere il dato.
+      LRighe[0] := 'Non posso proseguire.';
+      LRighe.Add('Controlla il nome e riprova, oppure indicamene un altro.');
+    end;
     Result := string.Join(#10, LRighe.ToArray);
   finally
     LRighe.Free;
@@ -620,11 +1091,19 @@ begin
   // validatore ha la forma  campo="valore" non compare ...
   LMancanti := TList<string>.Create;
   try
+    // FEEDBACK 19/10 (punto 1): stessa domanda all'utente anche quando il
+    // codice NON c'e' (ARGOMENTO_MANCANTE, che ora copre anche null e ""),
+    // non solo quando e' inventato. Formati dei messaggi del validatore:
+    //   VALORE_NON_ANCORATO   campo="valore" non compare ...
+    //   ARGOMENTO_MANCANTE    'campo' obbligatorio per <tool>
     for LErrore in AErrori do
     begin
-      if LErrore.Codice <> 'VALORE_NON_ANCORATO' then
+      if LErrore.Codice = 'VALORE_NON_ANCORATO' then
+        LCampo := Copy(LErrore.Messaggio, 1, Pos('=', LErrore.Messaggio) - 1)
+      else if LErrore.Codice = 'ARGOMENTO_MANCANTE' then
+        LCampo := Copy(LErrore.Messaggio, 2, Pos(''' ', LErrore.Messaggio) - 2)
+      else
         Continue;
-      LCampo := Copy(LErrore.Messaggio, 1, Pos('=', LErrore.Messaggio) - 1);
       if LCampo = 'codice_non_conformita_base' then
         LDato := 'il codice della non conformita'''
       else if LCampo = 'codici_lotto_materia_prima' then
@@ -684,7 +1163,7 @@ begin
       if LSpedizioni <> nil then
       begin
         if LClienti > 0 then
-          LRighe.Add('Vuoi che ti mostri l''anteprima delle email per i clienti coinvolti?');
+          LRighe.Add(PROPOSTA_ANTEPRIMA_EMAIL);
       end
       else
       begin
@@ -697,6 +1176,375 @@ begin
       end;
     end;
     Result := Trim(string.Join(#10, LRighe.ToArray));
+  finally
+    LRighe.Free;
+  end;
+end;
+
+class function TSintesiRisposta.DichiaraScritturaNonAvvenuta(const ATesto: string;
+  AEsecuzione: TEsitoEsecuzione): Boolean;
+const
+  // Forme passive/perfette che affermano un fatto compiuto: "e' stata
+  // creata", "sono stati salvati", "ho salvato", "e' stato registrato".
+  // Volutamente NON si cercano le parole da sole ("creare", "salvare",
+  // "vuoi che la salvi?"): una proposta o una domanda e' lecita.
+  MODELLO =
+    '\b(e''|\x{E8}|sono|ho|abbiamo|viene|vengono)\s+(stat[aoie]\s+)?' +
+    '(creat|salvat|registrat|inserit|memorizzat|aggiornat|aperta|invi?at)[aoie]?\b';
+begin
+  Result := (not ScritturaEseguita(AEsecuzione)) and
+    TRegEx.IsMatch(ATesto, MODELLO, [roIgnoreCase]);
+end;
+
+class function TSintesiRisposta.NotaNessunaScrittura: string;
+begin
+  Result := 'Attenzione: in questo turno nel gestionale non e'' stato salvato nulla. ' +
+    'Se vuoi rendere effettiva l''operazione, chiedimelo e ti chiedero'' conferma.';
+end;
+
+// 12.5 -> "12,50" (due decimali fissi, formato italiano).
+function SoldiIt(AValore: Double): string;
+var
+  LFormato: TFormatSettings;
+begin
+  LFormato := TFormatSettings.Create('it-IT');
+  Result := FormatFloat('#,##0.00', AValore, LFormato);
+end;
+
+// "nome1, nome2" dalle "denominazione" di un array di oggetti; "nessuno" se
+// l'array manca o e' vuoto.
+function ElencoDenominazioni(AOggetto: TJSONObject; const ANomeArray: string): string;
+var
+  LValore: TJSONValue;
+  LNomi: TList<string>;
+  i: Integer;
+begin
+  LValore := AOggetto.GetValue(ANomeArray);
+  LNomi := TList<string>.Create;
+  try
+    if LValore is TJSONArray then
+      for i := 0 to TJSONArray(LValore).Count - 1 do
+        if TJSONArray(LValore).Items[i] is TJSONObject then
+          LNomi.Add(TestoCampo(TJSONObject(TJSONArray(LValore).Items[i]), 'denominazione'));
+    if LNomi.Count = 0 then
+      Result := 'nessuno'
+    else
+      Result := string.Join(', ', LNomi.ToArray);
+  finally
+    LNomi.Free;
+  end;
+end;
+
+class function TSintesiRisposta.BloccoEsitoSimulazione(AEsecuzione: TEsitoEsecuzione;
+  out ASoloSimulazione: Boolean): string;
+const
+  EURO = #$20AC;
+var
+  LPasso, LEsito: TEsitoPasso;
+  LOut, LPrezzo, LElemento: TJSONObject;
+  LRighe: TList<string>;
+  LAttuale, LSimulato, LNecessaria, LDisponibile, LPrezzoAtt, LPrezzoSug: Double;
+  LCentAttuale, LCentSimulato, LDeltaCent: Int64;
+  LProducibili, LProducibiliAtt: Int64;
+  LCostoCompleto, LProducibiliCompleto, LPrezzoDisp: Boolean;
+  LLimitante, LUnita, LFonte, LMotivo, LSegno: string;
+  LInsufficienti: TJSONValue;
+  i: Integer;
+begin
+  Result := '';
+  ASoloSimulazione := False;
+  LPasso := PassoRiuscito(AEsecuzione, TOOL_SIMULA);
+  if (LPasso = nil) or (LPasso.Output = nil) then
+    Exit;
+  LOut := LPasso.Output;
+  // Senza i tre costi non si scrive nulla: meglio la risposta del modello.
+  if not (LOut.TryGetValue<Double>('costo_ricetta_attuale', LAttuale) and
+          LOut.TryGetValue<Double>('costo_ricetta_simulata', LSimulato)) then
+    Exit;
+
+  ASoloSimulazione := True;
+  for LEsito in AEsecuzione.Esiti do
+    if not ((LEsito.Tool = TOOL_SIMULA) and (LEsito.Esito = 'ok')) then
+      ASoloSimulazione := False;
+
+  LCostoCompleto := True;
+  LOut.TryGetValue<Boolean>('costo_completo', LCostoCompleto);
+
+  LRighe := TList<string>.Create;
+  try
+    LRighe.Add('**Simulazione dell''adattamento** (nulla e'' stato salvato)');
+    LRighe.Add('');
+
+    // COSTO per unita'. Si arrotondano PRIMA i due costi al centesimo e la
+    // differenza si fa sui valori mostrati: cosi' i tre numeri che l'utente
+    // legge tornano fra loro (6,01 -> 6,57 = +0,56, non +0,57 da un delta
+    // calcolato sui valori non arrotondati).
+    LCentAttuale := Round(LAttuale * 100);
+    LCentSimulato := Round(LSimulato * 100);
+    LDeltaCent := LCentSimulato - LCentAttuale;
+    if LDeltaCent > 0 then
+      LSegno := '+' + SoldiIt(LDeltaCent / 100) + ' ' + EURO + ', piu'' caro'
+    else if LDeltaCent < 0 then
+      LSegno := '-' + SoldiIt(Abs(LDeltaCent) / 100) + ' ' + EURO + ', piu'' economico'
+    else
+      LSegno := 'invariato';
+    LRighe.Add('- Costo degli ingredienti per unita'': ' + SoldiIt(LCentAttuale / 100) + ' ' + EURO +
+      ' -> ' + SoldiIt(LCentSimulato / 100) + ' ' + EURO);
+    LRighe.Add('  - Variazione: ' + LSegno);
+    if not LCostoCompleto then
+      LRighe.Add('  - Attenzione: il costo e'' parziale, ci sono semilavorati di cui non si conosce il costo.');
+
+    // ALLERGENI.
+    LRighe.Add('- Allergeni rimossi: ' + ElencoDenominazioni(LOut, 'allergeni_rimossi'));
+    LRighe.Add('- Allergeni aggiunti: ' + ElencoDenominazioni(LOut, 'allergeni_aggiunti'));
+
+    // UNITA' PRODUCIBILI (se il tool le ha calcolate).
+    if LOut.TryGetValue<Int64>('unita_producibili', LProducibili) then
+    begin
+      LProducibiliAtt := 0;
+      LOut.TryGetValue<Int64>('unita_producibili_attuali', LProducibiliAtt);
+      LProducibiliCompleto := True;
+      LOut.TryGetValue<Boolean>('unita_producibili_completo', LProducibiliCompleto);
+      LLimitante := TestoCampo(LOut, 'componente_limitante');
+      LRighe.Add('- Unita'' producibili con la giacenza di oggi: ' + IntToStr(LProducibili) +
+        ' (con la ricetta attuale: ' + IntToStr(LProducibiliAtt) + ')');
+      LInsufficienti := LOut.GetValue('componenti_insufficienti');
+      if (LProducibili = 0) and (LInsufficienti is TJSONArray) and (TJSONArray(LInsufficienti).Count > 0) then
+      begin
+        LRighe.Add('  - Non se ne puo'' produrre nemmeno una: mancano queste materie prime:');
+        for i := 0 to TJSONArray(LInsufficienti).Count - 1 do
+          if TJSONArray(LInsufficienti).Items[i] is TJSONObject then
+          begin
+            LElemento := TJSONObject(TJSONArray(LInsufficienti).Items[i]);
+            LNecessaria := 0;
+            LDisponibile := 0;
+            LElemento.TryGetValue<Double>('necessaria_per_unita', LNecessaria);
+            LElemento.TryGetValue<Double>('disponibile', LDisponibile);
+            LUnita := TestoCampo(LElemento, 'unita_misura');
+            LRighe.Add('    - ' + TestoCampo(LElemento, 'denominazione') + ': servono ' +
+              NumeroIt(LNecessaria) + ' ' + LUnita + ' per unita'', disponibili ' +
+              NumeroIt(LDisponibile) + ' ' + LUnita);
+          end;
+      end
+      else if LLimitante <> '' then
+        LRighe.Add('  - Ingrediente che limita la produzione: ' + LLimitante);
+      if not LProducibiliCompleto then
+        LRighe.Add('  - Calcolo parziale: per alcuni ingredienti non si e'' potuta confrontare la giacenza.');
+    end;
+
+    // PREZZO DI VENDITA SUGGERITO.
+    LPrezzo := nil;
+    if LOut.GetValue('prezzo_vendita') is TJSONObject then
+      LPrezzo := TJSONObject(LOut.GetValue('prezzo_vendita'));
+    if LPrezzo <> nil then
+    begin
+      LPrezzoDisp := False;
+      LPrezzo.TryGetValue<Boolean>('disponibile', LPrezzoDisp);
+      if LPrezzoDisp and LPrezzo.TryGetValue<Double>('attuale', LPrezzoAtt) and
+         LPrezzo.TryGetValue<Double>('suggerito', LPrezzoSug) then
+      begin
+        LFonte := TestoCampo(LPrezzo, 'fonte_prezzo_attuale');
+        LRighe.Add('- Prezzo di vendita suggerito: ' + SoldiIt(LPrezzoSug) + ' ' + EURO +
+          ' (prezzo attuale ' + SoldiIt(LPrezzoAtt) + ' ' + EURO +
+          IfThen(LFonte <> '', ', da ' + LFonte, '') + ')');
+        LRighe.Add('  - Mantiene lo stesso rapporto prezzo/costo del prodotto di partenza, calcolato ' +
+          'solo sul costo degli ingredienti: e'' un supporto alla decisione, non un prezzo definitivo.');
+      end
+      else
+      begin
+        LMotivo := TestoCampo(LPrezzo, 'motivo');
+        LRighe.Add('- Prezzo di vendita suggerito: non calcolabile' +
+          IfThen(LMotivo <> '', ' (' + LMotivo + ')', '') + '.');
+      end;
+    end;
+
+    LRighe.Add('');
+    LRighe.Add('Per creare la variante compila il modulo qui sotto (codice e nome del nuovo prodotto) ' +
+      'e premi **Conferma e crea**.');
+    Result := string.Join(#10, LRighe.ToArray);
+  finally
+    LRighe.Free;
+  end;
+end;
+
+class function TSintesiRisposta.BloccoSceltaSostituzioni(AEsecuzione: TEsitoEsecuzione;
+  out ASoloRicerca: Boolean): string;
+var
+  LRicetta, LCerca, LEsito: TEsitoPasso;
+  LCodice, LNomeAllergene, LUnita: string;
+  LRighe: TList<string>;
+  LRadice, LComponente, LAllergene: TJSONValue;
+  LComponenti, LAllergeni, LCandidati: TJSONArray;
+  LQuantita: Double;
+  LVersione, LNumCandidati, i, j: Integer;
+  LContiene: Boolean;
+begin
+  Result := '';
+  ASoloRicerca := False;
+  LRicetta := PassoRiuscito(AEsecuzione, TOOL_RICETTA);
+  LCerca := PassoRiuscito(AEsecuzione, TOOL_CERCA_COMPONENTI);
+  if (LRicetta = nil) or (LCerca = nil) then
+    Exit;
+  // Serve l'allergene cercato: senza, non si sa quali ingredienti elencare.
+  if LCerca.ArgomentiRisolti = nil then
+    Exit;
+  LCodice := TestoCampo(LCerca.ArgomentiRisolti, 'escludi_allergene_codice');
+  if LCodice = '' then
+    Exit;
+  if not ((LRicetta.Output is TJSONObject) and (LCerca.Output is TJSONObject)) then
+    Exit;
+
+  // Solo questi due tool, tutti riusciti. Se il piano ha altro (una
+  // simulazione, per esempio) la risposta resta quella del modello.
+  ASoloRicerca := True;
+  for LEsito in AEsecuzione.Esiti do
+    if not (((LEsito.Tool = TOOL_RICETTA) or (LEsito.Tool = TOOL_CERCA_COMPONENTI)) and
+            (LEsito.Esito = 'ok')) then
+      ASoloRicerca := False;
+
+  LRadice := LRicetta.Output;
+  LVersione := 0;
+  TJSONObject(LRadice).TryGetValue<Integer>('versione', LVersione);
+  LNomeAllergene := LCodice;
+  LRighe := TList<string>.Create;
+  try
+    // Ingredienti della ricetta che portano l'allergene (il nome esteso
+    // dell'allergene si legge dal primo che lo contiene).
+    if TJSONObject(LRadice).GetValue('componenti') is TJSONArray then
+    begin
+      LComponenti := TJSONArray(TJSONObject(LRadice).GetValue('componenti'));
+      for i := 0 to LComponenti.Count - 1 do
+      begin
+        LComponente := LComponenti.Items[i];
+        if not (LComponente is TJSONObject) then
+          Continue;
+        LContiene := False;
+        if TJSONObject(LComponente).GetValue('allergeni') is TJSONArray then
+        begin
+          LAllergeni := TJSONArray(TJSONObject(LComponente).GetValue('allergeni'));
+          for j := 0 to LAllergeni.Count - 1 do
+          begin
+            LAllergene := LAllergeni.Items[j];
+            if (LAllergene is TJSONObject) and
+               (TestoCampo(TJSONObject(LAllergene), 'codice') = LCodice) then
+            begin
+              LContiene := True;
+              if TestoCampo(TJSONObject(LAllergene), 'denominazione') <> '' then
+                LNomeAllergene := TestoCampo(TJSONObject(LAllergene), 'denominazione');
+            end;
+          end;
+        end;
+        if LContiene then
+        begin
+          LQuantita := 0;
+          TJSONObject(LComponente).TryGetValue<Double>('quantita_standard', LQuantita);
+          LUnita := TestoCampo(TJSONObject(LComponente), 'unita_misura_dose');
+          LRighe.Add('- ' + TestoCampo(TJSONObject(LComponente), 'denominazione') + ': ' +
+            Trim(NumeroIt(LQuantita) + ' ' + LUnita));
+        end;
+      end;
+    end;
+
+    LNumCandidati := 0;
+    if TJSONObject(LCerca.Output).GetValue('candidati') is TJSONArray then
+    begin
+      LCandidati := TJSONArray(TJSONObject(LCerca.Output).GetValue('candidati'));
+      LNumCandidati := LCandidati.Count;
+    end;
+
+    if LRighe.Count = 0 then
+      Result := Format('Nella ricetta attuale (versione %d) nessun ingrediente contiene "%s".',
+        [LVersione, LNomeAllergene])
+    else
+      Result := Format('Ingredienti della ricetta attuale (versione %d) che contengono "%s":',
+        [LVersione, LNomeAllergene]) + #10 + string.Join(#10, LRighe.ToArray);
+
+    if LNumCandidati = 0 then
+      Result := Result + #10#10 +
+        'In anagrafica non ci sono ingredienti privi di questo allergene da proporre come sostituti.'
+    else
+      Result := Result + #10#10 + Format(
+        'In anagrafica ho trovato %d ingredienti (materie prime e semilavorati) privi di questo ' +
+        'allergene. Nel modulo qui sotto scegli con cosa sostituire ciascun ingrediente e in che ' +
+        'quantita'', poi premi **Simula**: calcolo l''impatto su costo e allergeni senza salvare nulla.',
+        [LNumCandidati]);
+  finally
+    LRighe.Free;
+  end;
+end;
+
+class function TSintesiRisposta.BloccoEsitoInvio(AEsecuzione: TEsitoEsecuzione;
+  out ASoloInvio: Boolean): string;
+var
+  LEsito: TEsitoPasso;
+  LRighe: TList<string>;
+  LElenco: TJSONArray;
+  LVoce, LErrore: TJSONValue;
+  LRiga: TJSONObject;
+  LTrovato: Boolean;
+  LMotivo: string;
+begin
+  Result := '';
+  ASoloInvio := False;
+  if AEsecuzione = nil then
+    Exit;
+
+  LTrovato := False;
+  ASoloInvio := True;
+  LRighe := TList<string>.Create;
+  try
+    for LEsito in AEsecuzione.Esiti do
+    begin
+      if (LEsito.Tool <> 'invia_email') and (LEsito.Tool <> 'invia_email_da_modello') then
+      begin
+        ASoloInvio := False;
+        Continue;
+      end;
+      if LEsito.Esito = 'ok' then
+      begin
+        LTrovato := True;
+        LRighe.Add('**' + CampoStringa(LEsito.Output, 'messaggio') + '**');
+        LElenco := CampoElenco(LEsito.Output, 'dettaglio');
+        if LElenco <> nil then
+          for LVoce in LElenco do
+          begin
+            if not (LVoce is TJSONObject) then
+              Continue;
+            LRiga := TJSONObject(LVoce);
+            if CampoVero(LRiga, 'inviata') then
+              LRighe.Add('- ' + CampoStringa(LRiga, 'email') + ': inviata')
+            else
+              LRighe.Add('- ' + CampoStringa(LRiga, 'email') + ': NON inviata (' +
+                CampoStringa(LRiga, 'errore') + ')');
+          end;
+        LElenco := CampoElenco(LEsito.Output, 'destinatari');
+        if LElenco <> nil then
+          for LVoce in LElenco do
+            LRighe.Add('- ' + LVoce.Value + ': inviata');
+      end
+      else if LEsito.Esito = 'ERRORE_TOOL' then
+      begin
+        LTrovato := True;
+        LMotivo := LEsito.Dettaglio;
+        if LEsito.Output <> nil then
+        begin
+          LErrore := LEsito.Output.GetValue('errore');
+          if LErrore is TJSONObject then
+            LMotivo := TestoCampo(TJSONObject(LErrore), 'messaggio')
+          else if LErrore <> nil then
+            LMotivo := LErrore.Value;
+        end;
+        LRighe.Add('**Nessuna email inviata.** Motivo: ' + LMotivo);
+      end
+      else
+        ASoloInvio := False;           // es. ancora in attesa di conferma
+    end;
+    if not LTrovato then
+    begin
+      ASoloInvio := False;
+      Exit;
+    end;
+    Result := string.Join(#10, LRighe.ToArray);
   finally
     LRighe.Free;
   end;

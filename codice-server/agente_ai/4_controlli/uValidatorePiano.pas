@@ -633,6 +633,17 @@ begin
   Result := True;
 end;
 
+// True se l'array JSON di stringhe AElenco (es. "required") contiene ANome.
+function ElencoContiene(AElenco: TJSONArray; const ANome: string): Boolean;
+var
+  LVoce: TJSONValue;
+begin
+  Result := False;
+  for LVoce in AElenco do
+    if LVoce.Value = ANome then
+      Exit(True);
+end;
+
 // "ALMENO UNO FRA". Alcuni tool hanno parametri tutti facoltativi, ma senza
 // almeno uno di un certo gruppo non possono lavorare (es. la ricetta si cerca
 // per nome OPPURE per id del prodotto). I gruppi sono dichiarati nel
@@ -807,7 +818,15 @@ begin
           for i := 0 to TJSONArray(LObbligatori).Count - 1 do
           begin
             LNome := TJSONArray(LObbligatori).Items[i].Value;
-            if (LPasso.Argomenti = nil) or (LPasso.Argomenti.GetValue(LNome) = nil) then
+            // FEEDBACK 19/10 (punto 1): un parametro obbligatorio presente
+            // ma VUOTO (null, "" o []) vale come MANCANTE. Prima il null
+            // arrivava al controllo di tipo e diventava "atteso string,
+            // trovato null" (TIPO_ERRATO): il turno finiva con il messaggio
+            // generico di piano non valido, mentre il modello aveva fatto la
+            // cosa giusta (non inventare il codice). Ora l'errore e' lo stesso
+            // del parametro assente, e la sintesi chiede il dato all'utente
+            // (TSintesiRisposta.TestoPianoNonValidoPer).
+            if (LPasso.Argomenti = nil) or not ValoreIndicato(LPasso.Argomenti.GetValue(LNome)) then
               Aggiungi(LContesto, 'ARGOMENTO_MANCANTE',
                 Format('''%s'' obbligatorio per %s', [LNome, LPasso.Tool]));
           end;
@@ -815,6 +834,12 @@ begin
           for LCoppia in LPasso.Argomenti do
           begin
             LNome := LCoppia.JsonString.Value;
+            // Obbligatorio vuoto: gia' segnalato sopra come ARGOMENTO_MANCANTE,
+            // non si aggiunge anche l'errore di tipo (sarebbe lo stesso
+            // problema contato due volte).
+            if (LObbligatori is TJSONArray) and not ValoreIndicato(LCoppia.JsonValue) and
+               ElencoContiene(TJSONArray(LObbligatori), LNome) then
+              Continue;
             if not (LProprieta is TJSONObject) or
                not (TJSONObject(LProprieta).GetValue(LNome) is TJSONObject) then
               Aggiungi(LContesto, 'ARGOMENTO_SCONOSCIUTO',

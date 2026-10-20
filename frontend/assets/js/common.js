@@ -113,6 +113,10 @@ App.Http = {
                 try {
                     const json = JSON.parse(testo);
                     errore.dettaglio = json.message || json.detail || testo;
+                    // Corpo completo, per le API che anche in errore
+                    // restituiscono dati utili (es. /api/email/invio con 502:
+                    // l'esito email per email).
+                    errore.corpo = json;
                 } catch (e) {
                     errore.dettaglio = testo;
                 }

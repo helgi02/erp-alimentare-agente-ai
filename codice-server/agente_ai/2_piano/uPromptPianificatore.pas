@@ -151,9 +151,18 @@ const
     'ESECUZIONE:'#10;
 
   // Risposta fissa quando il piano non supera i controlli.
+  // FEEDBACK 20/10: il vecchio testo ("Non sono riuscito a costruire un piano
+  // valido... Prova a riformularla") non diceva cosa era successo ne' se
+  // qualcosa fosse stato modificato. I controlli girano PRIMA dell'esecuzione,
+  // quindi qui e' sempre vero che nessun tool e' stato eseguito: lo si dice.
+  // Il consiglio e' onesto sul modello locale (non deterministico): ripetere la
+  // frase puo' bastare; altrimenti servono nomi o codici esatti. Il motivo
+  // tecnico (es. RIF_SINTASSI) resta nel log del pianificatore, non qui.
   MESSAGGIO_PIANO_NON_VALIDO =
-    'Non sono riuscito a costruire un piano valido per questa richiesta. Prova a riformularla in modo più' +
-    ' specifico.';
+    'Non sono riuscito a trasformare la richiesta in operazioni che il sistema possa eseguire in ' +
+    'sicurezza, quindi non ho fatto nulla: nessun dato è stato letto o modificato. ' +
+    'Puoi riprovare con la stessa frase (il modello può dare un risultato diverso) oppure essere più ' +
+    'preciso, indicando il nome o il codice esatto del prodotto, del cliente o del lotto.';
 
 implementation
 

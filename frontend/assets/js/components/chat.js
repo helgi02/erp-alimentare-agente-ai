@@ -617,10 +617,13 @@ App.Chat = {
             }));
 
             btn.disabled = true;
+            stato.className = 'chat-form-hint text-body-secondary';
             stato.textContent = 'Invio in corso...';
-            try {
-                const risposta = await App.Api.Agente.inviaEmail(messaggi);
-                // "dettaglio" e' nello stesso ordine di "messaggi", quindi di "schede".
+
+            // Esito email per email: "dettaglio" e' nello stesso ordine di
+            // "messaggi", quindi di "schede". Serve sia con 200 sia con 502
+            // (nessuna partita: il server manda lo stesso corpo).
+            const segnaEsiti = (risposta) => {
                 (risposta.dettaglio || []).forEach((riga, i) => {
                     const scheda = schede[i];
                     if (!scheda) return;
@@ -635,12 +638,26 @@ App.Chat = {
                         esito.textContent = 'Non inviata: ' + (riga.errore || 'errore sconosciuto');
                     }
                 });
-                stato.textContent = risposta.non_inviate
-                    ? risposta.inviate + ' inviate, ' + risposta.non_inviate + ' non inviate: puoi riprovare.'
-                    : 'Email inviate: ' + risposta.inviate + '.';
+            };
+
+            try {
+                const risposta = await App.Api.Agente.inviaEmail(messaggi);
+                segnaEsiti(risposta);
+                this._mostraEsitoInvio(stato, risposta,
+                    risposta.non_inviate ? ' Puoi correggere e riprovare quelle non partite.' : '');
             } catch (errore) {
-                // Validazione o configurazione: non e' partita nessuna email.
-                stato.textContent = 'Invio non riuscito: ' + (errore.dettaglio || errore.message || '');
+                if (errore.status === 502 && errore.corpo) {
+                    // Nessuna email partita: errore del server SMTP, con l'esito per email.
+                    segnaEsiti(errore.corpo);
+                    this._mostraEsitoInvio(stato, errore.corpo, ' Puoi riprovare.');
+                } else {
+                    // 400 (email non valida) o 500 (invio non configurato):
+                    // non e' partita nessuna email.
+                    this._mostraEsitoInvio(stato, {
+                        stato_invio: 'nessuna_inviata',
+                        messaggio: 'Invio non riuscito: ' + (errore.dettaglio || errore.message || '')
+                    }, '');
+                }
             } finally {
                 // Il pulsante resta spento solo se non c'e' piu' nulla da inviare.
                 btn.disabled = !div.querySelector('[data-bozza]:not([data-inviata])');
@@ -648,6 +665,25 @@ App.Chat = {
         });
 
         this.elencoMessaggi.appendChild(div);
+    },
+
+    // RIQUADRO DELL'ESITO DI UN INVIO EMAIL (20/10). Colore da stato_invio
+    // (verde = tutte, ambra = in parte, rosa = nessuna); se l'invio era
+    // simulato ([SMTP] Simula=1) grigio con l'etichetta "Simulazione",
+    // perche' nessuna email e' uscita davvero. Il testo e' "messaggio",
+    // scritto dal server (TEmailServer.DescriviEsito): il frontend non
+    // ricostruisce frasi proprie.
+    _mostraEsitoInvio(elemento, esito, coda) {
+        const U = App.Utils;
+        const colori = { tutte_inviate: 'verde', parziale: 'ambra', nessuna_inviata: 'rosa' };
+        const simulato = esito.simulato && esito.stato_invio !== 'nessuna_inviata';
+        const colore = simulato ? 'grigio' : (colori[esito.stato_invio] || 'grigio');
+        const testo = esito.messaggio ||
+            ('Email inviate: ' + (esito.inviate || 0) + ', non inviate: ' + (esito.non_inviate || 0) + '.');
+        elemento.className = 'chat-esito-invio badge-soft-' + colore;
+        elemento.innerHTML = (simulato ? '<strong>Simulazione</strong> &middot; ' : '') +
+            U.esc(testo + (coda || ''));
+        this.scorriInFondo();
     },
 
     aggiungiScelteDisambiguazione(problemi) {
@@ -1446,6 +1482,16 @@ App.Chat = {
                 }
                 if (Array.isArray(c.result.aperture_vista)) {
                     c.result.aperture_vista.forEach((v) => this.aggiungiAperturaVista(v));
+                }
+                // Esito di un invio fatto dall'agente (dopo la conferma):
+                // stesso riquadro colorato del pulsante dell'anteprima.
+                if (c.tool === 'invia_email' || c.tool === 'invia_email_da_modello') {
+                    const div = document.createElement('div');
+                    this.elencoMessaggi.appendChild(div);
+                    this._mostraEsitoInvio(div, c.ok === false
+                        ? { stato_invio: 'nessuna_inviata',
+                            messaggio: 'Nessuna email inviata: ' + (c.result.errore || 'errore sconosciuto') }
+                        : c.result, '');
                 }
             });
 

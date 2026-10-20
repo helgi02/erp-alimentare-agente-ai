@@ -467,7 +467,7 @@ end;
 function RisolviProdottoFinito(const AProdottoFinitoIDTesto, ANomeProdotto: string;
   out AProdottoID: Integer; out AJSONDisambiguazione: TJDOJsonObject): Boolean;
 var
-  LIDTesto: string;
+  LIDTesto, LDaCercare, LCampo: string;
   LRisoluzione: TRisoluzioneProdotto;
   LCandidati: TJDOJsonArray;
   LCandObj: TJDOJsonObject;
@@ -478,19 +478,35 @@ begin
   AJSONDisambiguazione := nil;
 
   LIDTesto := Trim(AProdottoFinitoIDTesto);
+  LDaCercare := Trim(ANomeProdotto);
+  LCampo := 'nome_prodotto';
   if LIDTesto <> '' then
   begin
-    if not TryStrToInt(LIDTesto, AProdottoID) or (AProdottoID <= 0) then
-      raise Exception.CreateFmt(
-        'prodotto_finito_id "%s" non valido: deve essere un numero intero positivo.', [LIDTesto]);
-    Exit(True);
+    if TryStrToInt(LIDTesto, AProdottoID) and (AProdottoID > 0) then
+      Exit(True);
+    // ID NON NUMERICO = CODICE (19/10, segnalazione del professore). Dopo
+    // "codice PF003-M e denominazione ..." il modello passava "PF003" (il
+    // CODICE della Torta Caprese) come prodotto_finito_id e il tool
+    // rispondeva "deve essere un numero intero": la variante non si
+    // creava mai (4 prove su 4). Un testo non numerico in un campo id e'
+    // quasi sempre un codice: lo si cerca come tale con la stessa
+    // RisolviProdotto del nome, che fa il match ESATTO su codice o
+    // denominazione. Se il codice non esiste si ottiene la solita
+    // disambiguazione ("non trovato"), quindi nessun prodotto viene scelto
+    // a caso. Se c'e' anche nome_prodotto, vale quello (e' il dato scritto
+    // apposta per la ricerca).
+    if LDaCercare = '' then
+    begin
+      LDaCercare := LIDTesto;
+      LCampo := 'prodotto_finito_id';
+    end;
   end;
 
-  if Trim(ANomeProdotto) = '' then
+  if LDaCercare = '' then
     raise Exception.Create(
       'Servono "prodotto_finito_id" (se gia'' noto) oppure "nome_prodotto" (anche parziale).');
 
-  LRisoluzione := TServizioVendite.RisolviProdotto(ANomeProdotto);
+  LRisoluzione := TServizioVendite.RisolviProdotto(LDaCercare);
   try
     if LRisoluzione.Esito = erRisolto then
     begin
@@ -506,7 +522,7 @@ begin
 
     LProblemi := AJSONDisambiguazione.A['problemi'];
     LProblemaObj := LProblemi.AddObject;
-    LProblemaObj.S['campo'] := 'nome_prodotto';
+    LProblemaObj.S['campo'] := LCampo;
     LProblemaObj.S['valore_cercato'] := LRisoluzione.ValoreCercato;
     if LRisoluzione.Esito = erAmbiguo then
       LProblemaObj.S['tipo'] := 'ambiguo'
@@ -827,9 +843,13 @@ begin
   Result[1].Name := 'cerca_componenti_ricetta';
   Result[1].Description :=
     'Cerca materie prime e/o semilavorati privi di un allergene, candidati alla sostituzione. ' +
-    'Usa per escludi_allergene_codice il codice presente in allergeni della ricetta: non inventarlo. ' +
+    'Per escludi_allergene_codice scrivi DIRETTAMENTE il codice, come testo fisso: e'' una costante che ' +
+    'ricavi dalla richiesta dell''utente (es. "senza lattosio" = LAT). NON usare riferimenti ai passi ' +
+    'precedenti ($1, $2, filtri o espressioni) per ottenerlo e non inventarlo. ' +
     'Senza tipo_componente né testo cerca candidati per tutti i componenti con quell''allergene. ' +
-    'Codici validi: GLUT, CROST, UOV, PESCE, ARAC, SOIA, LAT, FRSC, SED, SEN, SESAM, SOLF, LUPIN, MOLL. ' +
+    'Codici validi: GLUT (glutine), CROST (crostacei), UOV (uova), PESCE (pesce), ARAC (arachidi), ' +
+    'SOIA (soia), LAT (latte e lattosio), FRSC (frutta a guscio), SED (sedano), SEN (senape), ' +
+    'SESAM (sesamo), SOLF (solfiti), LUPIN (lupini), MOLL (molluschi). ' +
     'Ogni candidato riporta anche giacenza_disponibile (quantità attualmente in magazzino, sommata su ' +
     'tutti i lotti): è un dato puramente informativo, da segnalare al cliente se pari a zero, ma NON ' +
     'esclude il candidato dai risultati né impedisce di proseguire con simula_adattamento_ricetta o ' +
@@ -844,7 +864,8 @@ begin
   Result[1].Params := TArray<TMCPDynamicParamDef>.Create(
     DefParam(
       'escludi_allergene_codice',
-      'Codice allergene da escludere, preso dal campo allergeni della ricetta (es. LAT). ' +
+      'Codice allergene da escludere, scritto direttamente come testo (es. LAT per il lattosio, ' +
+      'GLUT per il glutine): mai un riferimento a un altro passo. ' +
       'Se assente, nessun filtro allergene.',
       False,
       'string'
@@ -1027,6 +1048,7 @@ var
   LArray: TJDOJsonArray;
   LObj: TJDOJsonObject;
   LSimulazione: TSimulazioneAdattamento;
+  LCopertura: TCoperturaComponente;
   LEsito: TEsitoAdattamentoRicetta;
   LJSONDisambiguazione: TJDOJsonObject;
   LCosto: TCostoRicetta;
@@ -1233,6 +1255,43 @@ begin
         LRoot.A['allergeni_rimossi'] := AllergeniToJSON(LSimulazione.AllergeniRimossi);
         LRoot.A['allergeni_aggiunti'] := AllergeniToJSON(LSimulazione.AllergeniAggiunti);
 
+        // UNITA' PRODUCIBILI (20/10): quante unita' di prodotto si possono
+        // fare con la giacenza di oggi, per la ricetta simulata e per quella
+        // attuale. Calcolate dal CODICE (TServizioRicette), non dal modello.
+        // "componenti_insufficienti" elenca le materie prime di cui non c'e'
+        // abbastanza per UNA sola unita' (quelle che mancano davvero).
+        LRoot.L['unita_producibili'] := LSimulazione.UnitaProducibili;
+        LRoot.L['unita_producibili_attuali'] := LSimulazione.UnitaProducibiliAttuali;
+        LRoot.B['unita_producibili_completo'] := LSimulazione.UnitaProducibiliCompleto;
+        LRoot.S['componente_limitante'] := LSimulazione.ComponenteLimitante;
+        LArray := LRoot.A['componenti_insufficienti'];
+        for LCopertura in LSimulazione.Coperture do
+          if LCopertura.Calcolabile and (LCopertura.UnitaCoperte = 0) then
+          begin
+            LObj := LArray.AddObject;
+            LObj.S['denominazione'] := LCopertura.Denominazione;
+            LObj.F['necessaria_per_unita'] := LCopertura.QuantitaPerUnita;
+            LObj.F['disponibile'] := LCopertura.Disponibile;
+            LObj.S['unita_misura'] := LCopertura.UnitaMisura;
+          end;
+
+        // PREZZO DI VENDITA SUGGERITO (20/10): stesso moltiplicatore di
+        // margine del prodotto di partenza applicato al nuovo costo degli
+        // ingredienti. Solo se calcolabile in modo affidabile; altrimenti
+        // "motivo" dice perche' no.
+        LObj := LRoot.O['prezzo_vendita'];
+        LObj.B['disponibile'] := LSimulazione.PrezzoDisponibile;
+        if LSimulazione.PrezzoDisponibile then
+        begin
+          LObj.F['attuale'] := LSimulazione.PrezzoAttuale;
+          LObj.F['suggerito'] := LSimulazione.PrezzoSuggerito;
+          LObj.F['moltiplicatore_margine'] := LSimulazione.MoltiplicatoreMargine;
+          LObj.S['fonte_prezzo_attuale'] := 'ordine ' + LSimulazione.PrezzoFonteOrdine + ' del ' +
+            FormatDateTime('dd/mm/yyyy', LSimulazione.PrezzoFonteData);
+        end
+        else
+          LObj.S['motivo'] := LSimulazione.PrezzoMotivoAssente;
+
         Result := TMCPToolResult.Text(LRoot.ToJSON);
       finally
         LRoot.Free;
@@ -1366,7 +1425,11 @@ const
     '"items":{"type":"object","properties":{"codice":{"type":"string"},"denominazione":{"type":"string"}},' +
     '"required":["codice","denominazione"]}},"allergeni_aggiunti":{"type":"array",' +
     '"items":{"type":"object","properties":{"codice":{"type":"string"},"denominazione":{"type":"string"}},' +
-    '"required":["codice","denominazione"]}}},"required":["esito","prodotto_finito_id",' +
+    '"required":["codice","denominazione"]}},' +
+    '"unita_producibili":{"type":"integer"},"unita_producibili_attuali":{"type":"integer"},' +
+    '"unita_producibili_completo":{"type":"boolean"},"componente_limitante":{"type":"string"},' +
+    '"componenti_insufficienti":{"type":"array","items":{"type":"object"}},' +
+    '"prezzo_vendita":{"type":"object"}},"required":["esito","prodotto_finito_id",' +
     '"costo_ricetta_attuale","costo_ricetta_simulata","delta_costo","costo_completo",' +
     '"allergeni_attuali","allergeni_simulati","allergeni_rimossi","allergeni_aggiunti"]}';
 

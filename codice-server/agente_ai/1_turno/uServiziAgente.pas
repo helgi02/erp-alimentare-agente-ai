@@ -44,6 +44,12 @@ type
     // scritto del testo). Con il pulsante la scelta e' gia' certa, quindi
     // TTurnoPianificato.PassoConferma non chiama il modello per leggerla.
     SceltaConferma: string;
+    // Utente che sta usando la chat (campo "utente" del corpo, preso dal
+    // badge in pagina). Finisce in "creato_da" di ogni tool di scrittura,
+    // al posto del valore scritto dal modello (vedi
+    // TTurnoPianificato.ImponiAutore). '' = client che non lo manda (es.
+    // batteria di test): allora resta il valore del piano, come prima.
+    Utente: string;
   end;
 
   TVoceSelezione = record
