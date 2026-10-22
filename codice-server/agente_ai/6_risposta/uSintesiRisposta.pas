@@ -221,6 +221,37 @@ const
     'registrato o inviato. Se e'' stata fatta una simulazione, dillo chiaramente ("simulazione", ' +
     '"nulla e'' stato salvato") e, se serve, chiedi se procedere con il salvataggio.'#10;
 
+  // FEEDBACK 22/10/2026: istruzione aggiunta al Synthesizer quando nel turno
+  // e' stato generato un file (generate_pdf / generate_csv). Quei tool
+  // stampano le righe ricevute per riferimento, senza raggruppare ne'
+  // sommare. Alla richiesta "PDF con il totale per cliente" la chat dava i
+  // totali giusti ma il PDF elencava le righe singole, senza dirlo.
+  // L'avviso nella descrizione del tool non basta: la descrizione la vede
+  // solo il pianificatore, non il Synthesizer che scrive la risposta.
+  ISTRUZIONI_FILE_GENERATO =
+    #10 +
+    'FILE GENERATO IN QUESTO TURNO'#10 +
+    'Il file (PDF o CSV) riporta le righe di dettaglio cosi'' come le ha lette il tool dei dati: NON ' +
+    'e'' raggruppato e NON contiene totali o somme. Se l''utente ha chiesto un raggruppamento, un ' +
+    'riepilogo o dei totali (es. "totale per cliente"), dillo esplicitamente: il file contiene le righe ' +
+    'di dettaglio e i totali sono solo in questa risposta. Non scrivere che il file e'' raggruppato o ' +
+    'che contiene i totali. La generazione del file non e'' una scrittura nel gestionale: puoi dire ' +
+    'che il file e'' stato generato e riportarne il link.'#10;
+
+// True se nel turno e' andato a buon fine un tool che genera un file.
+function FileGenerato(AEsecuzione: TEsitoEsecuzione): Boolean;
+var
+  LEsito: TEsitoPasso;
+begin
+  Result := False;
+  if AEsecuzione = nil then
+    Exit;
+  for LEsito in AEsecuzione.Esiti do
+    if (LEsito.Esito = 'ok') and
+       (SameText(LEsito.Tool, 'generate_pdf') or SameText(LEsito.Tool, 'generate_csv')) then
+      Exit(True);
+end;
+
 // True se almeno un passo di SCRITTURA (secondo il contratto del tool) e'
 // stato eseguito con esito positivo in questo turno. Una scrittura ferma in
 // CONFERMA_RICHIESTA non conta: non e' ancora avvenuta.
@@ -688,7 +719,8 @@ begin
       .AddPair('role', 'system')
       .AddPair('content', TPianificatore.PromptBase(AOggi) + PROMPT_SEZIONE_SINTESI +
         IfThen(ARiepilogoMostrato <> '', ISTRUZIONI_COMMENTO, '') +
-        IfThen(not ScritturaEseguita(AEsecuzione), ISTRUZIONI_NESSUNA_SCRITTURA, '')));
+        IfThen(not ScritturaEseguita(AEsecuzione), ISTRUZIONI_NESSUNA_SCRITTURA, '') +
+        IfThen(FileGenerato(AEsecuzione), ISTRUZIONI_FILE_GENERATO, '')));
     LMessaggi.AddElement(TJSONObject.Create
       .AddPair('role', 'user')
       .AddPair('content', PROMPT_MESSAGGIO_SINTESI_RICHIESTA + ADomanda +

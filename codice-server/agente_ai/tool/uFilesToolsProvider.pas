@@ -312,6 +312,40 @@ begin
   end;
 end;
 
+// Verifica che ogni "campo" richiesto esista davvero nelle righe.
+// AGGIUNTA 22/10/2026 (feedback prof.): .S[] restituisce '' per una chiave
+// inesistente, quindi un campo sbagliato (es. "importo" invece di
+// "importo_riga") produceva una colonna VUOTA senza alcun avviso. Ora e' un
+// errore esplicito che elenca i campi disponibili: il modello legge il
+// messaggio e corregge la chiamata al turno successivo.
+// Si controlla la prima riga: le righe arrivano per riferimento da un unico
+// tool di lettura, quindi hanno tutte la stessa struttura.
+procedure VerificaCampiEsistenti(const ADefinizioni: TArray<TDefinizioneColonna>;
+  const ARighe: TArray<TJDOJsonObject>);
+var
+  I: Integer;
+  LMancanti, LDisponibili: string;
+begin
+  LMancanti := '';
+  for I := 0 to High(ADefinizioni) do
+    if not ARighe[0].Contains(ADefinizioni[I].Campo) then
+    begin
+      if LMancanti <> '' then LMancanti := LMancanti + ', ';
+      LMancanti := LMancanti + '"' + ADefinizioni[I].Campo + '"';
+    end;
+  if LMancanti = '' then
+    Exit;
+  LDisponibili := '';
+  for I := 0 to ARighe[0].Count - 1 do
+  begin
+    if LDisponibili <> '' then LDisponibili := LDisponibili + ', ';
+    LDisponibili := LDisponibili + '"' + ARighe[0].Names[I] + '"';
+  end;
+  raise Exception.CreateFmt(
+    'Campi inesistenti nelle righe: %s. Campi disponibili: %s. ' +
+    'Usa solo questi nomi in "colonne".', [LMancanti, LDisponibili]);
+end;
+
 // Traduce le definizioni colonna (generiche, lette dal JSON) nel formato
 // richiesto dal motore CSV condiviso (services/uEsportazioneCSV.pas).
 function CostruisciColonneCSV(
@@ -440,7 +474,12 @@ begin
     'Genera un file CSV a partire da colonne e righe fornite dal chiamante. Usa questo tool ' +
     'DOPO il tool che legge i dati, nella stessa richiesta: le righe sono il risultato di quel ' +
     'tool (in un piano, un riferimento come "$1.dettaglio"), tu definisci solo quali campi ' +
-    'diventano colonne e con quale intestazione. Il risultato e'' un link ' +
+    'diventano colonne e con quale intestazione. ' +
+    'NON raggruppa, NON somma e NON calcola totali: il file riporta le righe cosi'' come le ' +
+    'ha restituite il tool di lettura. Se l''utente chiede un riepilogo raggruppato (es. totale ' +
+    'per cliente), genera comunque il file con le righe di dettaglio e DICHIARA nella risposta ' +
+    'che il file non e'' raggruppato e che i totali sono solo nel testo della risposta. ' +
+    'Il risultato e'' un link ' +
     'di download: riportalo all''utente cosi'' com''e'', non descriverne il contenuto al posto del file.';
   Result[0].ControllerClassName := 'TFilesToolsProvider';
   Result[0].Params := TArray<TMCPDynamicParamDef>.Create(
@@ -454,6 +493,11 @@ begin
     'Genera un documento PDF con una tabella, a partire da colonne e righe fornite dal ' +
     'chiamante. Stesso utilizzo di generate_csv: le righe sono il risultato del tool che ha ' +
     'letto i dati nella stessa richiesta (in un piano, un riferimento come "$1.dettaglio"). ' +
+    'NON raggruppa, NON somma e NON calcola totali: il file riporta le righe cosi'' come le ' +
+    'ha restituite il tool di lettura. Se l''utente chiede un riepilogo raggruppato (es. totale ' +
+    'per cliente), genera comunque il file con le righe di dettaglio e DICHIARA nella risposta ' +
+    'che il file non e'' raggruppato e che i totali sono solo nel testo della risposta. ' +
+    
     'Il risultato e'' un link di download: riportalo all''utente cosi'' com''e''.';
   Result[1].ControllerClassName := 'TFilesToolsProvider';
   Result[1].Params := TArray<TMCPDynamicParamDef>.Create(
@@ -481,6 +525,7 @@ begin
   try
     LDefinizioni := LeggiDefinizioniColonne(AArguments);
     LRighe := LeggiRighe(AArguments);
+    VerificaCampiEsistenti(LDefinizioni, LRighe);
   except
     on E: Exception do
       // Errore di formato imputabile a chi ha costruito la chiamata (il
